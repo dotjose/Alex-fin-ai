@@ -59,6 +59,10 @@ locals {
     trimspace(var.clerk_jwt_audience) != "" ? { CLERK_JWT_AUDIENCE = var.clerk_jwt_audience } : {},
     trimspace(var.openai_api_key) != "" ? { OPENAI_API_KEY = var.openai_api_key } : {}
   )
+
+  lambda_api_arn     = join("", [for m in module.lambda : m.api_function_arn])
+  lambda_worker_arn  = join("", [for m in module.lambda : m.worker_function_arn])
+  lambda_worker_name = join("", [for m in module.lambda : m.worker_function_name])
 }
 
 module "network" {
@@ -79,8 +83,10 @@ module "sqs" {
 }
 
 module "ecr" {
-  source      = "./modules/ecr"
-  name_prefix = local.name
+  source                   = "./modules/ecr"
+  name_prefix              = local.name
+  creation_mode            = var.ecr_repository_creation_mode
+  repository_name_override = var.ecr_repository_name_override
 }
 
 module "iam" {
@@ -135,6 +141,8 @@ module "s3_cloudfront" {
 }
 
 module "lambda" {
+  count = var.enable_lambda_compute ? 1 : 0
+
   source                 = "./modules/lambda"
   api_function_name      = "${local.name}-api"
   worker_function_name   = "${local.name}-planner-worker"

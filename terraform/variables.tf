@@ -7,29 +7,53 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "enable_lambda_compute" {
+  type        = bool
+  description = "When false, API/worker Lambdas and API Gateway integrations are not managed (foundation: ECR, S3, CloudFront, SQS, IAM only). CI sets false until images exist in ECR."
+  default     = true
+}
+
+variable "ecr_repository_creation_mode" {
+  type        = string
+  description = "create = Terraform creates the repo; import = use data.aws_ecr_repository (repo must already exist — avoids RepositoryAlreadyExistsException when state was lost)."
+  default     = "create"
+
+  validation {
+    condition     = contains(["create", "import"], var.ecr_repository_creation_mode)
+    error_message = "ecr_repository_creation_mode must be create or import."
+  }
+}
+
+variable "ecr_repository_name_override" {
+  type        = string
+  default     = null
+  nullable    = true
+  description = "Optional ECR repository name override (passed to modules/ecr)."
+}
+
 variable "api_image_uri" {
   type        = string
-  description = "Private ECR image URI for the API Lambda (digest-pinned from CI)."
+  description = "Private ECR image URI for the API Lambda (CI digest or tag under account.dkr.ecr.*)."
   default     = ""
   validation {
     condition = (
-      var.api_image_uri == ""
-      || can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/", var.api_image_uri))
+      !var.enable_lambda_compute
+      || (var.api_image_uri != "" && can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/", var.api_image_uri)))
     )
-    error_message = "api_image_uri must be empty (foundation-only apply) or a private ECR image URI (account.dkr.ecr.region.amazonaws.com/...)."
+    error_message = "When enable_lambda_compute is true, api_image_uri must be a private ECR image URI."
   }
 }
 
 variable "worker_image_uri" {
   type        = string
-  description = "Private ECR image URI for the worker Lambda (same digest as API in CI)."
+  description = "Private ECR image URI for the worker Lambda (separate image from worker Dockerfile in CI)."
   default     = ""
   validation {
     condition = (
-      var.worker_image_uri == ""
-      || can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/", var.worker_image_uri))
+      !var.enable_lambda_compute
+      || (var.worker_image_uri != "" && can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/", var.worker_image_uri)))
     )
-    error_message = "worker_image_uri must be empty (foundation-only apply) or a private ECR image URI."
+    error_message = "When enable_lambda_compute is true, worker_image_uri must be a private ECR image URI."
   }
 }
 

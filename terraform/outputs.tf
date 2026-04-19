@@ -1,4 +1,4 @@
-# Contract for GitHub Actions: use `terraform output -raw <name>`; avoid `-json` until Lambdas exist.
+# Contract for GitHub Actions: use `terraform output -raw <name>`.
 
 output "cloudfront_url" {
   description = "Public site origin (same-origin /api/* via CloudFront → API Gateway)."
@@ -51,7 +51,7 @@ output "s3_bucket" {
 }
 
 output "ecr_repository_url" {
-  description = "Private ECR repository URL for docker push (no secret required)."
+  description = "Private ECR repository URL for docker push."
   value       = module.ecr.repository_url
 }
 
@@ -69,31 +69,35 @@ output "cloudfront_domain" {
 }
 
 output "lambda_function_arns" {
-  description = "Managed API + planner worker ARNs, plus expected child agent ARNs (requires Lambdas applied)."
+  description = "Managed API + planner worker ARNs (when deployed), plus expected child agent ARNs."
   value = merge(
-    {
-      api            = module.lambda.api_function_arn
-      planner_worker = module.lambda.worker_function_arn
-    },
+    (
+      local.lambda_api_arn != ""
+      ? {
+        api            = local.lambda_api_arn
+        planner_worker = local.lambda_worker_arn
+      }
+      : {}
+    ),
     local.external_agent_arns
   )
 }
 
 output "planner_worker_lambda_name" {
-  value = module.lambda.worker_function_name
+  value = local.lambda_worker_name
 }
 
 output "planner_worker_sqs_event_source_state" {
-  value = module.lambda.worker_event_source_state
+  value = join("", [for m in module.lambda : m.worker_event_source_state])
 }
 
 output "planner_worker_event_source_mapping_uuid" {
-  value = module.lambda.worker_event_source_uuid
+  value = join("", [for m in module.lambda : m.worker_event_source_uuid])
 }
 
 output "verify_sqs_lambda_mapping_cli" {
-  description = "Empty list = wrong region/account or mapping missing."
-  value       = "aws lambda list-event-source-mappings --function-name ${module.lambda.worker_function_name} --region ${data.aws_region.current.name}"
+  description = "Debug CLI hint."
+  value       = local.lambda_worker_name != "" ? "aws lambda list-event-source-mappings --function-name ${local.lambda_worker_name} --region ${data.aws_region.current.name}" : ""
 }
 
 output "frontend_url_effective" {

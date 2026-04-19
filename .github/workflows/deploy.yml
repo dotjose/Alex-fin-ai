@@ -70,6 +70,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      - name: Optional Terraform ECR mode (create | import)
+        if: ${{ vars.ECR_REPOSITORY_CREATION_MODE != '' }}
+        run: |
+          echo "TF_VAR_ecr_repository_creation_mode=${{ vars.ECR_REPOSITORY_CREATION_MODE }}" >> "$GITHUB_ENV"
+
       - name: Preflight
         env:
           AWS_REGION_EXPECT: ${{ vars.AWS_REGION }}
@@ -135,9 +140,6 @@ jobs:
           BOOT_DIR="${GITHUB_WORKSPACE}/terraform/bootstrap"
           cd "$BOOT_DIR"
           cp "${GITHUB_WORKSPACE}/terraform/.terraform.lock.hcl" ./.terraform.lock.hcl
-          if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
-            aws s3 cp "s3://${STATE_BUCKET}/${META_KEY}" ./terraform.tfstate 2>/dev/null || true
-          fi
           ok=false
           for attempt in 1 2 3; do
             if terraform init -backend=false -input=false; then ok=true; break; fi
@@ -178,35 +180,31 @@ jobs:
         working-directory: terraform
         run: terraform validate
 
-      - name: Terraform apply (foundation — ECR, API GW, SQS, IAM, CloudFront, S3; no Lambdas)
+      - name: Detect Lambda in Terraform state
+        id: tfstate
         working-directory: terraform
-        env:
-          TF_VAR_api_image_uri: ""
-          TF_VAR_worker_image_uri: ""
-          TF_VAR_api_base_url: ""
-          TF_VAR_frontend_url: ""
-          TF_VAR_cors_allow_origin_primary: ""
         run: |
           set -euo pipefail
-          TARGETS=(
-            -target=module.network
-            -target=module.api
-            -target=module.sqs
-            -target=module.ecr
-            -target=module.iam
-            -target=module.s3_cloudfront
-            -target=aws_sqs_queue_policy.main
-          )
-          ok=false
-          for attempt in 1 2 3; do
-            if terraform apply -lock-timeout=300s -auto-approve -input=false "${TARGETS[@]}"; then
-              ok=true
-              break
-            fi
-            echo "Terraform foundation failed (attempt ${attempt}); retry in 30s..."
-            sleep 30
-          done
-          if [ "$ok" != true ]; then exit 1; fi
+          if terraform state list -no-color 2>/dev/null | grep -qE '^module\.lambda(\[0\])?\.module\.compute\.'; then
+            echo "has_lambda=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_lambda=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform plan and apply (foundation — no Lambda compute, no -target)
+        if: steps.tfstate.outputs.has_lambda == 'false'
+        working-directory: terraform
+        env:
+          TF_VAR_enable_lambda_compute: "false"
+        run: |
+          set -euo pipefail
+          export TF_VAR_api_image_uri=""
+          export TF_VAR_worker_image_uri=""
+          export TF_VAR_api_base_url=""
+          export TF_VAR_frontend_url=""
+          export TF_VAR_cors_allow_origin_primary=""
+          terraform plan -out=plan_foundation.tfplan -input=false -lock-timeout=300s
+          bash "${GITHUB_WORKSPACE}/scripts/ci/terraform_apply_network_retry.sh" plan_foundation.tfplan
 
       - name: Login to Amazon ECR
         working-directory: terraform
@@ -216,7 +214,7 @@ jobs:
           REGISTRY="${REPO_URL%%/*}"
           aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REGISTRY}"
 
-      - name: Build and push API image (digest-pinned, linux/amd64)
+      - name: Build and push API + worker images (linux/amd64, digest-pinned)
         working-directory: terraform
         env:
           TAG: ${{ github.sha }}
@@ -224,72 +222,54 @@ jobs:
           set -euo pipefail
           REPO_URL="$(terraform output -raw ecr_repository_url)"
           REPO_NAME="$(terraform output -raw ecr_repository_name)"
-          IMAGE_TAG="${REPO_URL}:${TAG}"
-          docker build --platform linux/amd64 -f "${GITHUB_WORKSPACE}/apps/api/Dockerfile" -t "$IMAGE_TAG" "${GITHUB_WORKSPACE}"
-          docker push "$IMAGE_TAG"
-          DIGEST="$(aws ecr describe-images --repository-name "$REPO_NAME" --region "${AWS_REGION}" \
-            --image-ids "imageTag=${TAG}" --query 'imageDetails[0].imageDigest' --output text)"
-          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
-            echo "::error::Could not resolve ECR image digest"
+          TAG_API="${TAG}-api"
+          TAG_WORKER="${TAG}-worker"
+          docker build --platform linux/amd64 -f "${GITHUB_WORKSPACE}/apps/api/Dockerfile" -t "${REPO_URL}:${TAG_API}" "${GITHUB_WORKSPACE}"
+          docker build --platform linux/amd64 -f "${GITHUB_WORKSPACE}/apps/api/Dockerfile.worker" -t "${REPO_URL}:${TAG_WORKER}" "${GITHUB_WORKSPACE}"
+          docker push "${REPO_URL}:${TAG_API}"
+          docker push "${REPO_URL}:${TAG_WORKER}"
+          DIGEST_API="$(aws ecr describe-images --repository-name "$REPO_NAME" --region "${AWS_REGION}" \
+            --image-ids "imageTag=${TAG_API}" --query 'imageDetails[0].imageDigest' --output text)"
+          DIGEST_WORKER="$(aws ecr describe-images --repository-name "$REPO_NAME" --region "${AWS_REGION}" \
+            --image-ids "imageTag=${TAG_WORKER}" --query 'imageDetails[0].imageDigest' --output text)"
+          if [ -z "$DIGEST_API" ] || [ "$DIGEST_API" = "None" ] || [ -z "$DIGEST_WORKER" ] || [ "$DIGEST_WORKER" = "None" ]; then
+            echo "::error::Could not resolve ECR image digests"
             exit 1
           fi
-          echo "IMAGE_URI=${REPO_URL}@${DIGEST}" >> "$GITHUB_ENV"
+          echo "IMAGE_URI_API=${REPO_URL}@${DIGEST_API}" >> "$GITHUB_ENV"
+          echo "IMAGE_URI_WORKER=${REPO_URL}@${DIGEST_WORKER}" >> "$GITHUB_ENV"
 
-      - name: Terraform plan and apply (Lambdas + integrations; CORS open)
+      - name: Terraform plan and apply (compute + CORS — private ECR only, no -target)
         working-directory: terraform
         env:
-          TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_api_base_url: ""
-          TF_VAR_frontend_url: ""
-          TF_VAR_cors_allow_origin_primary: ""
+          TF_VAR_enable_lambda_compute: "true"
         run: |
           set -euo pipefail
-          ok=false
-          for attempt in 1 2 3; do
-            terraform plan -out=tfplan_lambdas -input=false -lock-timeout=300s
-            if terraform apply -lock-timeout=300s -auto-approve -input=false tfplan_lambdas; then
-              ok=true
-              break
-            fi
-            echo "Terraform Lambdas apply failed (attempt ${attempt}); retry in 30s..."
-            sleep 30
-          done
-          if [ "$ok" != true ]; then exit 1; fi
+          : "${IMAGE_URI_API:?missing IMAGE_URI_API}"
+          : "${IMAGE_URI_WORKER:?missing IMAGE_URI_WORKER}"
+          export TF_VAR_api_image_uri="$IMAGE_URI_API"
+          export TF_VAR_worker_image_uri="$IMAGE_URI_WORKER"
+          CF="$(terraform output -raw cloudfront_url)"
+          export TF_VAR_api_base_url="$CF"
+          export TF_VAR_frontend_url="$CF"
+          export TF_VAR_cors_allow_origin_primary="$CF"
+          terraform plan -out=plan_compute.tfplan -input=false -lock-timeout=300s
+          bash "${GITHUB_WORKSPACE}/scripts/ci/terraform_apply_network_retry.sh" plan_compute.tfplan
 
       - name: Verify SQS → Lambda mapping
         working-directory: terraform
         run: |
           set -euo pipefail
           FN="$(terraform output -raw planner_worker_lambda_name)"
+          if [ -z "$FN" ]; then
+            echo "::error::planner_worker_lambda_name empty"
+            exit 1
+          fi
           MAP_COUNT="$(aws lambda list-event-source-mappings --function-name "$FN" --query 'length(EventSourceMappings)' --output text)"
           if [ -z "$MAP_COUNT" ] || [ "$MAP_COUNT" = "0" ]; then
             echo "::error::No SQS event source mapping for worker $FN"
             exit 1
           fi
-
-      - name: Terraform plan and apply (CORS + Lambda env URLs)
-        working-directory: terraform
-        env:
-          TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
-        run: |
-          set -euo pipefail
-          CF="$(terraform output -raw cloudfront_url)"
-          export TF_VAR_api_base_url="$CF"
-          export TF_VAR_frontend_url="$CF"
-          export TF_VAR_cors_allow_origin_primary="$CF"
-          ok=false
-          for attempt in 1 2 3; do
-            terraform plan -out=tfplan_cors -input=false -lock-timeout=300s
-            if terraform apply -lock-timeout=300s -auto-approve -input=false tfplan_cors; then
-              ok=true
-              break
-            fi
-            echo "Terraform CORS apply failed (attempt ${attempt}); retry in 30s..."
-            sleep 30
-          done
-          if [ "$ok" != true ]; then exit 1; fi
 
       - name: Export deploy env for Next + S3
         working-directory: terraform
@@ -332,7 +312,6 @@ jobs:
             if aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths "/*" --no-cli-pager; then
               exit 0
             fi
-            echo "CloudFront invalidation attempt $i failed; retry in 15s..."
-            sleep 15
+            sleep $((i * 15))
           done
           exit 1

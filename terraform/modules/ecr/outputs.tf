@@ -1,13 +1,13 @@
 output "repository_url" {
   description = "Registry URL for docker login / image URI prefix"
-  value       = aws_ecr_repository.api.repository_url
+  value       = local.repository_url_resolved
 }
 
 output "repository_name" {
   description = "ECR repository name (aws ecr describe-images)"
-  value       = aws_ecr_repository.api.name
+  value       = local.repository_name_resolved
 }
 
 output "repository_arn" {
-  value = aws_ecr_repository.api.arn
+  value = local.repository_arn_resolved
 }
