@@ -100,10 +100,8 @@ module "sqs" {
 }
 
 module "ecr" {
-  source                   = "./modules/ecr"
-  name_prefix              = local.name
-  creation_mode            = var.ecr_repository_creation_mode
-  repository_name_override = var.ecr_repository_name_override
+  source      = "./modules/ecr"
+  name_prefix = local.name
 }
 
 module "iam" {

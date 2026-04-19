@@ -1,0 +1,16 @@
+# ECR: single resource module.ecr.aws_ecr_repository.api (name = alex-api-<ACCOUNT_ID>)
+# If the repository already exists in AWS and is missing from Terraform state:
+
+terraform state list | grep module.ecr
+
+# Remove stale indexed resource (after removing count from module):
+terraform state rm 'module.ecr.aws_ecr_repository.api[0]'
+
+# Remove stale data source if present:
+terraform state rm 'module.ecr.data.aws_ecr_repository.imported[0]'
+
+# Import existing repository (replace ACCOUNT_ID):
+terraform import 'module.ecr.aws_ecr_repository.api' 'alex-api-ACCOUNT_ID'
+
+# If Terraform reports wrong address, normalize index:
+terraform state mv 'module.ecr.aws_ecr_repository.api[0]' 'module.ecr.aws_ecr_repository.api'

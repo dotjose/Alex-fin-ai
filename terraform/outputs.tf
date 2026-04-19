@@ -55,6 +55,11 @@ output "ecr_repository_url" {
   value       = module.ecr.repository_url
 }
 
+output "repository_url" {
+  description = "Alias of ecr_repository_url (single ECR module)."
+  value       = module.ecr.repository_url
+}
+
 output "ecr_repository_name" {
   description = "ECR repository name for describe-images / IAM scoping."
   value       = module.ecr.repository_name

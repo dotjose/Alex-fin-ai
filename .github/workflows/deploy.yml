@@ -83,11 +83,6 @@ jobs:
             echo "bootstrap_adopt_bucket=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Optional Terraform ECR mode (create | import)
-        if: ${{ vars.ECR_REPOSITORY_CREATION_MODE != '' }}
-        run: |
-          echo "TF_VAR_ecr_repository_creation_mode=${{ vars.ECR_REPOSITORY_CREATION_MODE }}" >> "$GITHUB_ENV"
-
       - name: Preflight
         env:
           AWS_REGION_EXPECT: ${{ vars.AWS_REGION }}

@@ -13,24 +13,6 @@ variable "enable_lambda_compute" {
   default     = true
 }
 
-variable "ecr_repository_creation_mode" {
-  type        = string
-  description = "create = Terraform creates the repo; import = use data.aws_ecr_repository (repo must already exist — avoids RepositoryAlreadyExistsException when state was lost)."
-  default     = "create"
-
-  validation {
-    condition     = contains(["create", "import"], var.ecr_repository_creation_mode)
-    error_message = "ecr_repository_creation_mode must be create or import."
-  }
-}
-
-variable "ecr_repository_name_override" {
-  type        = string
-  default     = null
-  nullable    = true
-  description = "Optional ECR repository name override (passed to modules/ecr)."
-}
-
 variable "lambda_api_image_tag" {
   type        = string
   description = "ECR image tag when api_image_uri is empty (resolved as repository_url:tag). CI sets e.g. commitSha-api."
