@@ -10,13 +10,13 @@ variable "aws_region" {
 variable "api_image_uri" {
   type        = string
   description = "Container image for the FastAPI (Mangum) Lambda. CI replaces with ECR digest after first push."
-  default     = "public.ecr.aws/lambda/python:3.12-x86_64"
+  default     = "public.ecr.aws/lambda/python:3.12"
 }
 
 variable "worker_image_uri" {
   type        = string
   description = "Container image for the SQS planner worker (same digest as API is typical)."
-  default     = "public.ecr.aws/lambda/python:3.12-x86_64"
+  default     = "public.ecr.aws/lambda/python:3.12"
 }
 
 variable "supabase_url" {
