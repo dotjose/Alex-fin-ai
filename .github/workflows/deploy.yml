@@ -303,12 +303,27 @@ jobs:
         working-directory: terraform
         run: |
           set -euo pipefail
-          echo "NEXT_PUBLIC_API_URL=$(terraform output -raw cloudfront_url)" >> "$GITHUB_ENV"
-          echo "FRONTEND_URL=$(terraform output -raw cloudfront_url)" >> "$GITHUB_ENV"
-          echo "API_BASE_URL=$(terraform output -raw api_base_url)" >> "$GITHUB_ENV"
-          echo "SQS_QUEUE_URL=$(terraform output -raw sqs_queue_url)" >> "$GITHUB_ENV"
-          echo "S3_BUCKET_NAME=$(terraform output -raw s3_bucket_name)" >> "$GITHUB_ENV"
-          echo "DISTRIBUTION_ID=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_ENV"
+          CF="$(terraform output -raw cloudfront_url)"
+          AGW="$(terraform output -raw api_gateway_url)"
+          API_BASE="$(terraform output -raw api_base_url)"
+          HEALTH="$(terraform output -raw healthcheck_url)"
+          {
+            echo "NEXT_PUBLIC_API_URL=${CF}"
+            echo "FRONTEND_URL=${CF}"
+            echo "FRONTEND_URL_EFFECTIVE=${CF}"
+            echo "API_BASE_URL=${API_BASE}"
+            echo "API_GATEWAY_URL=${AGW}"
+            echo "HEALTHCHECK_URL=${HEALTH}"
+            echo "SQS_QUEUE_URL=$(terraform output -raw sqs_queue_url)"
+            echo "S3_BUCKET_NAME=$(terraform output -raw s3_bucket_name)"
+            echo "DISTRIBUTION_ID=$(terraform output -raw cloudfront_distribution_id)"
+          } >> "$GITHUB_ENV"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "::notice::FRONTEND_URL=${CF}"
+          echo "::notice::API_BASE_URL=${API_BASE}"
+          echo "::notice::API_GATEWAY_URL=${AGW}"
+          echo "::notice::HEALTHCHECK_URL=${HEALTH}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: Build Next.js static export
         working-directory: frontend
@@ -343,3 +358,37 @@ jobs:
             sleep $((i * 15))
           done
           exit 1
+
+      - name: Post-deploy health check (CloudFront /api/health)
+        run: |
+          set -euo pipefail
+          : "${HEALTHCHECK_URL:?HEALTHCHECK_URL missing}"
+          echo "Probing ${HEALTHCHECK_URL}"
+          ok=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            code="$(curl -sS -o /tmp/h.json -w '%{http_code}' --max-time 45 "$HEALTHCHECK_URL" || true)"
+            if [ "$code" = "200" ] && grep -q '"status"' /tmp/h.json && grep -q 'healthy' /tmp/h.json; then
+              echo "Health OK (HTTP $code)"
+              cat /tmp/h.json
+              ok=true
+              break
+            fi
+            echo "Attempt $attempt: HTTP ${code:-?} body:"; cat /tmp/h.json 2>/dev/null || true
+            sleep 15
+          done
+          rm -f /tmp/h.json
+          if [ "$ok" != true ]; then
+            echo "::error::Health check failed after retries: ${HEALTHCHECK_URL}"
+            exit 1
+          fi
+
+      - name: Deployment URLs (summary)
+        run: |
+          set -euo pipefail
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "FRONTEND_URL=${FRONTEND_URL:-}"
+          echo "API_URL (browser / CloudFront origin)=${API_BASE_URL:-}"
+          echo "API_GATEWAY_URL (direct)=${API_GATEWAY_URL:-}"
+          echo "HEALTH_ENDPOINT=${HEALTHCHECK_URL:-}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "::notice::Deploy summary — Frontend=${FRONTEND_URL:-} API=${API_BASE_URL:-} Health=${HEALTHCHECK_URL:-}"

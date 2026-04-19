@@ -157,6 +157,11 @@ def create_app() -> FastAPI:
     async def health_check():
         return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
+    @app.get("/api/health")
+    async def health_check_api_prefix():
+        """Same payload as /health; path matches API Gateway ANY /api/{proxy+} and CloudFront /api/*."""
+        return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
     register_routes(app, settings)
     return app
 

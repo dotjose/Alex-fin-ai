@@ -16,8 +16,18 @@ output "api_gateway_endpoint" {
 }
 
 output "api_gateway_url" {
-  description = "Alias of api_gateway_endpoint for CI."
+  description = "Direct API Gateway HTTP API base URL (bypasses CloudFront)."
   value       = module.api.api_endpoint
+}
+
+output "frontend_url" {
+  description = "Static UI + /api proxy (CloudFront HTTPS URL)."
+  value       = module.s3_cloudfront.cloudfront_https_url
+}
+
+output "healthcheck_url" {
+  description = "GET health via CloudFront → API Gateway → Lambda (/api/health)."
+  value       = "${trimsuffix(module.s3_cloudfront.cloudfront_https_url, "/")}/api/health"
 }
 
 output "sqs_queue_url" {
