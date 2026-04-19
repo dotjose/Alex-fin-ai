@@ -17,29 +17,3 @@ resource "aws_ecr_repository" "api" {
     prevent_destroy = true
   }
 }
-
-resource "aws_ecr_repository_policy" "lambda_pull" {
-  repository = aws_ecr_repository.api.name
-
-  policy = jsonencode({
-    Version = "2008-10-17"
-    Statement = [{
-      Sid    = "LambdaServicePull"
-      Effect = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-      Action = [
-        "ecr:BatchGetImage",
-        "ecr:GetDownloadUrlForLayer",
-        "ecr:BatchCheckLayerAvailability",
-      ]
-      Resource = aws_ecr_repository.api.arn
-      Condition = {
-        StringEquals = {
-          "aws:SourceAccount" = data.aws_caller_identity.current.account_id
-        }
-      }
-    }]
-  })
-}
