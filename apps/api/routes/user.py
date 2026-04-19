@@ -9,9 +9,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
-from core.auth import clerk_bearer, current_user_id_factory
+from core.auth import HTTPAuthorizationCredentials, clerk_bearer, current_user_id_factory
 from core.config import Settings
-from fastapi_clerk_auth import HTTPAuthorizationCredentials
 from services.supabase_client import get_database
 
 logger = logging.getLogger(__name__)

@@ -248,6 +248,11 @@ def apply_settings_to_environ() -> None:
     else:
         os.environ.pop("LOCAL_DEV", None)
     os.environ["AGENT_EXECUTION_MODE"] = s.agent_execution_mode
+    os.environ["CLERK_JWT_ISSUER"] = s.clerk_jwt_issuer.strip()
+    if (s.clerk_jwt_audience or "").strip():
+        os.environ["CLERK_JWT_AUDIENCE"] = (s.clerk_jwt_audience or "").strip()
+    else:
+        os.environ.pop("CLERK_JWT_AUDIENCE", None)
     os.environ.setdefault("OTEL_SERVICE_NAME", "alexfin-agent")
     os.environ.setdefault("LANGFUSE_TRACING_ENVIRONMENT", s.node_env)
     # OpenAI Agents default trace export targets OpenAI; we use Langfuse + OpenRouter only.
