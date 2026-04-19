@@ -19,9 +19,6 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  TF_VAR_node_env: production
-
 jobs:
   ci:
     name: CI (PR)
@@ -55,15 +52,21 @@ jobs:
       contents: read
     env:
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
-      TF_VAR_supabase_url: ${{ vars.SUPABASE_URL }}
-      TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      TF_VAR_supabase_database_url: ${{ secrets.SUPABASE_DATABASE_URL }}
-      TF_VAR_openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
-      TF_VAR_clerk_secret_key: ${{ secrets.CLERK_SECRET_KEY }}
+      TF_VAR_node_env: ${{ vars.NODE_ENV }}
+      TF_VAR_supabase_url: ${{ secrets.TF_SUPABASE_URL }}
+      TF_VAR_supabase_service_role_key: ${{ secrets.TF_VAR_SUPABASE_SERVICE_ROLE_KEY }}
+      TF_VAR_supabase_database_url: ${{ secrets.TF_VAR_SUPABASE_DATABASE_URL }}
+      TF_VAR_openrouter_api_key: ${{ secrets.TF_VAR_OPENROUTER_API_KEY }}
+      TF_VAR_clerk_secret_key: ${{ secrets.TF_VAR_CLERK_SECRET_KEY }}
       TF_VAR_clerk_jwt_issuer: ${{ vars.CLERK_JWT_ISSUER }}
       TF_VAR_or_model_simple: ${{ vars.OR_MODEL_SIMPLE }}
       TF_VAR_or_model_fast: ${{ vars.OR_MODEL_FAST }}
       TF_VAR_or_model_reasoning: ${{ vars.OR_MODEL_REASONING }}
+      TF_VAR_langfuse_public_key: ${{ secrets.TF_VAR_LANGFUSE_PUBLIC_KEY }}
+      TF_VAR_langfuse_secret_key: ${{ secrets.TF_VAR_LANGFUSE_SECRET_KEY }}
+      TF_VAR_langfuse_host: ${{ vars.LANGFUSE_HOST }}
+      TF_VAR_openai_api_key: ${{ secrets.TF_VAR_OPENAI_API_KEY }}
+      TF_VAR_polygon_api_key: ${{ secrets.TF_VAR_POLYGON_API_KEY }}
     outputs:
       state_bucket: ${{ steps.bootstrap.outputs.state_bucket }}
       lock_table: ${{ steps.bootstrap.outputs.lock_table }}
@@ -87,8 +90,7 @@ jobs:
       - name: Preflight
         env:
           AWS_REGION_EXPECT: ${{ vars.AWS_REGION }}
-          SUPABASE_URL_VAR: ${{ vars.SUPABASE_URL }}
-          CLERK_ISSUER_VAR: ${{ vars.CLERK_JWT_ISSUER }}
+          CLERK_ISSUER_EXPECT: ${{ vars.CLERK_JWT_ISSUER }}
         run: |
           set -euo pipefail
           if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
@@ -99,20 +101,20 @@ jobs:
             echo "::error::Set repository variable AWS_REGION (e.g. us-east-1)"
             exit 1
           fi
-          if [ -z "${SUPABASE_URL_VAR:-}" ]; then
-            echo "::error::Set repository variable SUPABASE_URL"
+          if [ -z "${TF_VAR_supabase_url:-}" ]; then
+            echo "::error::Set repository secret TF_SUPABASE_URL (Terraform variable: supabase_url)"
             exit 1
           fi
-          if [ -z "${CLERK_ISSUER_VAR:-}" ]; then
+          if [ -z "${CLERK_ISSUER_EXPECT:-}" ]; then
             echo "::error::Set repository variable CLERK_JWT_ISSUER"
             exit 1
           fi
           if [ -z "${TF_VAR_supabase_service_role_key:-}" ] || [ -z "${TF_VAR_supabase_database_url:-}" ] || [ -z "${TF_VAR_openrouter_api_key:-}" ]; then
-            echo "::error::Set secrets SUPABASE_SERVICE_ROLE_KEY, SUPABASE_DATABASE_URL, OPENROUTER_API_KEY"
+            echo "::error::Set repository secrets TF_VAR_SUPABASE_SERVICE_ROLE_KEY, TF_VAR_SUPABASE_DATABASE_URL, TF_VAR_OPENROUTER_API_KEY"
             exit 1
           fi
           if [ -z "${TF_VAR_clerk_secret_key:-}" ]; then
-            echo "::error::Set secret CLERK_SECRET_KEY"
+            echo "::error::Set repository secret TF_VAR_CLERK_SECRET_KEY"
             exit 1
           fi
           aws sts get-caller-identity --no-cli-pager
@@ -249,15 +251,21 @@ jobs:
       contents: read
     env:
       TF_VAR_aws_region: ${{ vars.AWS_REGION }}
-      TF_VAR_supabase_url: ${{ vars.SUPABASE_URL }}
-      TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      TF_VAR_supabase_database_url: ${{ secrets.SUPABASE_DATABASE_URL }}
-      TF_VAR_openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
-      TF_VAR_clerk_secret_key: ${{ secrets.CLERK_SECRET_KEY }}
+      TF_VAR_node_env: ${{ vars.NODE_ENV }}
+      TF_VAR_supabase_url: ${{ secrets.TF_SUPABASE_URL }}
+      TF_VAR_supabase_service_role_key: ${{ secrets.TF_VAR_SUPABASE_SERVICE_ROLE_KEY }}
+      TF_VAR_supabase_database_url: ${{ secrets.TF_VAR_SUPABASE_DATABASE_URL }}
+      TF_VAR_openrouter_api_key: ${{ secrets.TF_VAR_OPENROUTER_API_KEY }}
+      TF_VAR_clerk_secret_key: ${{ secrets.TF_VAR_CLERK_SECRET_KEY }}
       TF_VAR_clerk_jwt_issuer: ${{ vars.CLERK_JWT_ISSUER }}
       TF_VAR_or_model_simple: ${{ vars.OR_MODEL_SIMPLE }}
       TF_VAR_or_model_fast: ${{ vars.OR_MODEL_FAST }}
       TF_VAR_or_model_reasoning: ${{ vars.OR_MODEL_REASONING }}
+      TF_VAR_langfuse_public_key: ${{ secrets.TF_VAR_LANGFUSE_PUBLIC_KEY }}
+      TF_VAR_langfuse_secret_key: ${{ secrets.TF_VAR_LANGFUSE_SECRET_KEY }}
+      TF_VAR_langfuse_host: ${{ vars.LANGFUSE_HOST }}
+      TF_VAR_openai_api_key: ${{ secrets.TF_VAR_OPENAI_API_KEY }}
+      TF_VAR_polygon_api_key: ${{ secrets.TF_VAR_POLYGON_API_KEY }}
     outputs:
       cloudfront_url: ${{ steps.final_outputs.outputs.cloudfront_url }}
       api_base_url: ${{ steps.final_outputs.outputs.api_base_url }}
