@@ -100,8 +100,14 @@ export function useDashboardData(
       if (!userRes.ok) {
         throw new Error(`Failed to load profile (${userRes.status})`);
       }
-      const userJson = await userRes.json();
-      setUser(userJson.user ?? null);
+      const userJson = (await userRes.json()) as {
+        user?: Record<string, unknown>;
+        user_id?: string;
+      };
+      if (userJson.user) setUser(userJson.user);
+      else if (userJson.user_id)
+        setUser({ clerk_user_id: userJson.user_id });
+      else setUser(null);
 
       const accountsRes = await fetch(`${getApiUrl()}/api/accounts`, { headers });
       if (!accountsRes.ok) {

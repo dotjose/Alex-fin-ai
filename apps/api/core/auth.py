@@ -29,8 +29,8 @@ def _normalize_issuer(raw: str) -> str:
     return (raw or "").strip().rstrip("/")
 
 
-def _token_claims_for_log(token: str) -> tuple[Any, Any]:
-    """Issuer/aud from token without verifying signature (logging only)."""
+def _token_claims_for_log(token: str) -> tuple[Any, Any, Any]:
+    """iss / aud / azp from token without verifying signature (logging only)."""
     try:
         claims = jwt.decode(
             token,
@@ -41,24 +41,27 @@ def _token_claims_for_log(token: str) -> tuple[Any, Any]:
                 "verify_iss": False,
             },
         )
-        return claims.get("iss"), claims.get("aud")
+        return claims.get("iss"), claims.get("aud"), claims.get("azp")
     except Exception:
-        return None, None
+        return None, None, None
 
 
 def _log_jwt_mismatch(
     *,
     token_iss: Any,
     token_aud: Any,
+    token_azp: Any,
     expected_issuer: str,
     expected_audience: str | None,
     reason: str,
 ) -> None:
     logger.warning(
-        "jwt_validation_failed reason=%s token_iss=%r token_aud=%r expected_issuer=%r expected_audience=%r",
+        "jwt_validation_failed reason=%s token_iss=%r token_aud=%r token_azp=%r "
+        "expected_issuer=%r expected_audience=%r",
         reason,
         token_iss,
         token_aud,
+        token_azp,
         expected_issuer,
         expected_audience,
     )
@@ -91,7 +94,7 @@ class ClerkJWTBearer(HTTPBearer):
         )
 
     def _decode(self, token: str) -> dict[str, Any]:
-        token_iss, token_aud = _token_claims_for_log(token)
+        token_iss, token_aud, token_azp = _token_claims_for_log(token)
         decode_kwargs: dict[str, Any] = {
             "algorithms": ["RS256"],
             "issuer": self._expected_issuer,
@@ -114,6 +117,7 @@ class ClerkJWTBearer(HTTPBearer):
             _log_jwt_mismatch(
                 token_iss=token_iss,
                 token_aud=token_aud,
+                token_azp=token_azp,
                 expected_issuer=self._expected_issuer,
                 expected_audience=self._expected_audience,
                 reason=type(e).__name__,
@@ -127,6 +131,7 @@ class ClerkJWTBearer(HTTPBearer):
             _log_jwt_mismatch(
                 token_iss=token_iss,
                 token_aud=token_aud,
+                token_azp=token_azp,
                 expected_issuer=self._expected_issuer,
                 expected_audience=self._expected_audience,
                 reason=type(e).__name__,

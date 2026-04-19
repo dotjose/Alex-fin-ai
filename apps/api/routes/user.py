@@ -16,6 +16,12 @@ from services.supabase_client import get_database
 logger = logging.getLogger(__name__)
 
 
+class UserIdResponse(BaseModel):
+    """GET /api/user — JWT only, no database."""
+
+    user_id: str
+
+
 class UserResponse(BaseModel):
     user: Dict[str, Any]
     created: bool
@@ -35,42 +41,37 @@ def build_router(settings: Settings) -> APIRouter:
     get_uid = current_user_id_factory(settings)
     db = get_database()
 
-    @router.get("/user", response_model=UserResponse)
-    async def get_or_create_user(
-        creds: HTTPAuthorizationCredentials = Depends(guard),
-    ):
-        clerk_user_id = creds.decoded["sub"]
+    @router.get("/user", response_model=UserIdResponse)
+    async def get_user_identity(creds: HTTPAuthorizationCredentials = Depends(guard)):
+        """Decode Bearer JWT and return Clerk user id — no Supabase calls."""
         try:
-            user = db.users.find_by_clerk_id(clerk_user_id)
-            if user:
-                return UserResponse(user=jsonable_encoder(user), created=False)
-
-            token_data = creds.decoded
-            display_name = (
-                token_data.get("name")
-                or token_data.get("email", "").split("@")[0]
-                or "New User"
-            )
-            user_data = {
-                "clerk_user_id": clerk_user_id,
-                "display_name": display_name,
-                "years_until_retirement": None,
-                "target_retirement_income": None,
-                "asset_class_targets": None,
-                "region_targets": None,
-            }
-            db.users.insert_user(user_data)
-            created_user = db.users.find_by_clerk_id(clerk_user_id)
-            if not created_user:
+            decoded = creds.decoded or {}
+            user_id = str(decoded.get("sub", "")).strip()
+            if not user_id:
                 raise HTTPException(
-                    status_code=500,
-                    detail="User was created but could not be loaded.",
+                    status_code=401,
+                    detail="Token is missing subject (sub).",
                 )
-            logger.info("Created new user: %s", clerk_user_id)
-            return UserResponse(user=jsonable_encoder(created_user), created=True)
+            expected_issuer = settings.clerk_jwt_issuer.strip().rstrip("/")
+            expected_audience = (settings.clerk_jwt_audience or "").strip() or None
+            logger.info(
+                "api_user_jwt_debug token_iss=%r token_azp=%r token_aud=%r "
+                "expected_issuer=%r expected_audience=%r",
+                decoded.get("iss"),
+                decoded.get("azp"),
+                decoded.get("aud"),
+                expected_issuer,
+                expected_audience,
+            )
+            return UserIdResponse(user_id=user_id)
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.error("Error in get_or_create_user: %s", e)
-            raise HTTPException(status_code=500, detail="Failed to load user profile") from e
+            logger.exception("api_user_identity_failed: %s", e)
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to resolve user identity.",
+            ) from e
 
     @router.put("/user", response_model=UserResponse)
     async def update_user(
@@ -90,7 +91,10 @@ def build_router(settings: Settings) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error updating user: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            logger.error("Error updating user: %s", e, exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Profile update failed.",
+            ) from e
 
     return router

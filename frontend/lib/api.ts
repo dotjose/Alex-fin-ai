@@ -10,7 +10,7 @@ function apiBaseUrl(): string {
 }
 
 // Type definitions
-/** Matches `GET|PUT /api/user` → `{ user }` row from Supabase (nullable numeric / JSON fields). */
+/** Full profile row from `PUT /api/user` (and legacy GET). `GET /api/user` may return only `{ user_id }`. */
 export interface User {
   clerk_user_id: string;
   display_name?: string | null;
@@ -116,14 +116,16 @@ export type { ApiCapabilities };
 export function createApiClient(token: string) {
   return {
     capabilities: () => fetchCapabilities(),
-    // User endpoints (GET returns { user, created })
+    // User: GET returns `{ user_id }` (JWT only); PUT returns `{ user, created }`.
     user: {
       get: async () => {
-        const r = await apiRequest<{ user: User; created: boolean }>(
+        const r = await apiRequest<{ user?: User; created?: boolean; user_id?: string }>(
           '/api/user',
           token
         );
-        return r.user;
+        if (r.user) return r.user;
+        if (r.user_id) return { clerk_user_id: r.user_id } as User;
+        throw new Error('Invalid user response');
       },
       update: async (data: Partial<User>) => {
         const r = await apiRequest<{ user: User; created: boolean }>('/api/user', token, {

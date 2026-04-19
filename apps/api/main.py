@@ -8,6 +8,7 @@ import logging
 import os
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 
 from pathlib import Path
@@ -43,6 +44,10 @@ _LOGGED_ENV_KEYS = (
     "OPENROUTER_API_KEY",
     "CLERK_JWT_ISSUER",
 )
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def log_required_env_gaps() -> list[str]:
@@ -166,7 +171,7 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def deferred_db_startup(request: Request, call_next):
         path = request.url.path
-        if path in ("/health", "/api/health"):
+        if path in ("/health", "/api/health", "/api/user") and request.method == "GET":
             return await call_next(request)
 
         def _sync_once() -> None:
@@ -178,6 +183,8 @@ def create_app() -> FastAPI:
 
         await asyncio.to_thread(_sync_once)
         return await call_next(request)
+
+    expose_errors = settings.node_env == "development" or _env_truthy("EXPOSE_API_ERRORS")
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(request: Request, exc: RequestValidationError):
@@ -191,6 +198,11 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
+        if expose_errors:
+            detail = exc.detail
+            if not isinstance(detail, str):
+                detail = str(detail)
+            return JSONResponse(status_code=exc.status_code, content={"detail": detail})
         user_friendly = {
             401: "Your session has expired. Please sign in again.",
             403: "You don't have permission to access this resource.",
@@ -205,6 +217,15 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         logger.error("Unexpected error: %s", exc, exc_info=True)
+        if expose_errors:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": str(exc),
+                    "type": type(exc).__name__,
+                    "traceback": traceback.format_exc(),
+                },
+            )
         return JSONResponse(
             status_code=500,
             content={"detail": "An unexpected error occurred. Our team has been notified."},
@@ -216,6 +237,8 @@ def create_app() -> FastAPI:
 
 def _attach_minimal_handlers(app: FastAPI) -> FastAPI:
     """Exception handlers when Settings cannot load (Lambda degraded mode)."""
+
+    expose_errors = _env_truthy("EXPOSE_API_ERRORS")
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(request: Request, exc: RequestValidationError):
@@ -229,11 +252,21 @@ def _attach_minimal_handlers(app: FastAPI) -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return JSONResponse(status_code=exc.status_code, content={"detail": detail})
 
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         logger.error("Unexpected error: %s", exc, exc_info=True)
+        if expose_errors:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": str(exc),
+                    "type": type(exc).__name__,
+                    "traceback": traceback.format_exc(),
+                },
+            )
         return JSONResponse(
             status_code=500,
             content={"detail": "An unexpected error occurred. Our team has been notified."},

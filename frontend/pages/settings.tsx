@@ -45,14 +45,30 @@ export default function SettingsPage() {
       });
       if (!res.ok) throw new Error("Failed to load settings");
       const body = await res.json();
-      const u = body.user as UserRow;
-      setDisplayName(u.display_name ?? "");
-      setYearsUntilRetirement(num(u.years_until_retirement, 0));
-      setTargetRetirementIncome(num(u.target_retirement_income, 0));
-      setEquityTarget(num(u.asset_class_targets?.equity, 0));
-      setFixedIncomeTarget(num(u.asset_class_targets?.fixed_income, 0));
-      setNorthAmericaTarget(num(u.region_targets?.north_america, 0));
-      setInternationalTarget(num(u.region_targets?.international, 0));
+      if (body.user) {
+        const u = body.user as UserRow;
+        setDisplayName(u.display_name ?? "");
+        setYearsUntilRetirement(num(u.years_until_retirement, 0));
+        setTargetRetirementIncome(num(u.target_retirement_income, 0));
+        setEquityTarget(num(u.asset_class_targets?.equity, 0));
+        setFixedIncomeTarget(num(u.asset_class_targets?.fixed_income, 0));
+        setNorthAmericaTarget(num(u.region_targets?.north_america, 0));
+        setInternationalTarget(num(u.region_targets?.international, 0));
+      } else if (body.user_id) {
+        setDisplayName(
+          user.fullName ||
+            user.primaryEmailAddress?.emailAddress?.split("@")[0] ||
+            ""
+        );
+        setYearsUntilRetirement(0);
+        setTargetRetirementIncome(0);
+        setEquityTarget(50);
+        setFixedIncomeTarget(50);
+        setNorthAmericaTarget(50);
+        setInternationalTarget(50);
+      } else {
+        throw new Error("Unexpected user response");
+      }
     } catch (e) {
       showToast("error", e instanceof Error ? e.message : "Load failed");
     } finally {
@@ -111,8 +127,18 @@ export default function SettingsPage() {
         }),
       });
       if (!res.ok) throw new Error("Save failed");
+      const saveBody = await res.json();
+      if (saveBody.user) {
+        const u = saveBody.user as UserRow;
+        setDisplayName(u.display_name ?? "");
+        setYearsUntilRetirement(num(u.years_until_retirement, 0));
+        setTargetRetirementIncome(num(u.target_retirement_income, 0));
+        setEquityTarget(num(u.asset_class_targets?.equity, 0));
+        setFixedIncomeTarget(num(u.asset_class_targets?.fixed_income, 0));
+        setNorthAmericaTarget(num(u.region_targets?.north_america, 0));
+        setInternationalTarget(num(u.region_targets?.international, 0));
+      }
       showToast("success", "Settings saved");
-      await load();
     } catch (e) {
       showToast("error", e instanceof Error ? e.message : "Save failed");
     } finally {
