@@ -78,12 +78,9 @@ module "sqs" {
   max_receive_count          = 3
 }
 
-module "s3_cloudfront" {
-  source                 = "./modules/s3-cloudfront"
-  name_prefix            = local.name
-  comment                = "${local.name} UI + API (private S3 + OAC)"
-  ui_bucket_name         = "${local.name}-ui-${data.aws_caller_identity.current.account_id}"
-  http_api_origin_domain = replace(module.api.api_endpoint, "https://", "")
+module "ecr" {
+  source      = "./modules/ecr"
+  name_prefix = local.name
 }
 
 module "iam" {
@@ -91,6 +88,8 @@ module "iam" {
   name_prefix              = local.name
   queue_arn                = module.sqs.queue_arn
   child_lambda_invoke_arns = local.child_invoke_arn_list
+  ecr_repository_arn       = module.ecr.repository_arn
+  depends_on               = [module.ecr]
 }
 
 data "aws_iam_policy_document" "sqs_queue_access" {
@@ -101,11 +100,7 @@ data "aws_iam_policy_document" "sqs_queue_access" {
       type        = "AWS"
       identifiers = [module.iam.api_role_arn]
     }
-    actions = [
-      "sqs:SendMessage",
-      "sqs:GetQueueAttributes",
-      "sqs:GetQueueUrl",
-    ]
+    actions   = ["sqs:SendMessage"]
     resources = [module.sqs.queue_arn]
   }
 
@@ -121,7 +116,6 @@ data "aws_iam_policy_document" "sqs_queue_access" {
       "sqs:DeleteMessage",
       "sqs:GetQueueAttributes",
       "sqs:ChangeMessageVisibility",
-      "sqs:GetQueueUrl",
     ]
     resources = [module.sqs.queue_arn]
   }
@@ -132,9 +126,16 @@ resource "aws_sqs_queue_policy" "main" {
   policy    = data.aws_iam_policy_document.sqs_queue_access.json
 }
 
+module "s3_cloudfront" {
+  source                 = "./modules/s3-cloudfront"
+  name_prefix            = local.name
+  comment                = "${local.name} UI + API (private S3 + OAC)"
+  ui_bucket_name         = "${local.name}-ui-${data.aws_caller_identity.current.account_id}"
+  http_api_origin_domain = replace(module.api.api_endpoint, "https://", "")
+}
+
 module "lambda" {
   source                 = "./modules/lambda"
-  name_prefix            = local.name
   api_function_name      = "${local.name}-api"
   worker_function_name   = "${local.name}-planner-worker"
   api_role_arn           = module.iam.api_role_arn
@@ -149,5 +150,5 @@ module "lambda" {
   worker_memory_mb       = 2048
   api_id                 = module.api.id
   api_execution_arn      = module.api.execution_arn
-  depends_on             = [aws_sqs_queue_policy.main, module.iam]
+  depends_on             = [aws_sqs_queue_policy.main, module.iam, module.ecr]
 }

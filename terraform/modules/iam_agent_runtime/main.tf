@@ -32,6 +32,34 @@ resource "aws_iam_role_policy_attachment" "worker_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_iam_role_policy" "api_ecr_pull" {
+  name = "${var.name_prefix}-api-ecr-pull"
+  role = aws_iam_role.api.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "PullApiImage"
+      Effect   = "Allow"
+      Action   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"]
+      Resource = var.ecr_repository_arn
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "worker_ecr_pull" {
+  name = "${var.name_prefix}-worker-ecr-pull"
+  role = aws_iam_role.worker.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "PullWorkerImage"
+      Effect   = "Allow"
+      Action   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"]
+      Resource = var.ecr_repository_arn
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "api_sqs_send" {
   name = "${var.name_prefix}-api-sqs-send"
   role = aws_iam_role.api.id
@@ -40,7 +68,7 @@ resource "aws_iam_role_policy" "api_sqs_send" {
     Statement = [{
       Sid      = "EnqueueAgentJobs"
       Effect   = "Allow"
-      Action   = ["sqs:SendMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"]
+      Action   = ["sqs:SendMessage"]
       Resource = var.queue_arn
     }]
   })
@@ -60,7 +88,6 @@ resource "aws_iam_role_policy" "worker_runtime" {
           "sqs:DeleteMessage",
           "sqs:GetQueueAttributes",
           "sqs:ChangeMessageVisibility",
-          "sqs:GetQueueUrl",
         ]
         Resource = var.queue_arn
       },

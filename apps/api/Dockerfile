@@ -1,8 +1,8 @@
 # Build from repository root:
-#   docker build -f apps/api/Dockerfile .
+#   docker build --platform linux/amd64 -f apps/api/Dockerfile .
 #
-# Default CMD: FastAPI + Mangum (HTTP API). Override CMD / image_config for the SQS worker
-# to: workers.sqs_worker.handler
+# AWS Lambda container: base image provides the Lambda Runtime API client.
+# CMD = Mangum-wrapped FastAPI ASGI app. Override image CMD for the SQS worker to workers.sqs_worker.handler.
 
 FROM public.ecr.aws/lambda/python:3.12
 

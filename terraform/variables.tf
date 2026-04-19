@@ -9,14 +9,28 @@ variable "aws_region" {
 
 variable "api_image_uri" {
   type        = string
-  description = "Container image for the FastAPI (Mangum) Lambda. CI replaces with ECR digest after first push."
-  default     = "public.ecr.aws/lambda/python:3.12"
+  description = "Private ECR image URI for the API Lambda (digest-pinned from CI)."
+  default     = ""
+  validation {
+    condition = (
+      var.api_image_uri == ""
+      || can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/", var.api_image_uri))
+    )
+    error_message = "api_image_uri must be empty (foundation-only apply) or a private ECR image URI (account.dkr.ecr.region.amazonaws.com/...)."
+  }
 }
 
 variable "worker_image_uri" {
   type        = string
-  description = "Container image for the SQS planner worker (same digest as API is typical)."
-  default     = "public.ecr.aws/lambda/python:3.12"
+  description = "Private ECR image URI for the worker Lambda (same digest as API in CI)."
+  default     = ""
+  validation {
+    condition = (
+      var.worker_image_uri == ""
+      || can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/", var.worker_image_uri))
+    )
+    error_message = "worker_image_uri must be empty (foundation-only apply) or a private ECR image URI."
+  }
 }
 
 variable "supabase_url" {

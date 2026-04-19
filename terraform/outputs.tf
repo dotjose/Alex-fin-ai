@@ -1,4 +1,4 @@
-# Contract for GitHub Actions: parse `terraform output -json` (e.g. infra.json).
+# Contract for GitHub Actions: use `terraform output -raw <name>`; avoid `-json` until Lambdas exist.
 
 output "cloudfront_url" {
   description = "Public site origin (same-origin /api/* via CloudFront → API Gateway)."
@@ -52,12 +52,12 @@ output "s3_bucket" {
 
 output "ecr_repository_url" {
   description = "Private ECR repository URL for docker push (no secret required)."
-  value       = module.lambda.ecr_repository_url
+  value       = module.ecr.repository_url
 }
 
 output "ecr_repository_name" {
   description = "ECR repository name for describe-images / IAM scoping."
-  value       = module.lambda.ecr_repository_name
+  value       = module.ecr.repository_name
 }
 
 output "cloudfront_distribution_id" {
@@ -69,7 +69,7 @@ output "cloudfront_domain" {
 }
 
 output "lambda_function_arns" {
-  description = "Managed API + planner worker ARNs, plus expected child agent ARNs."
+  description = "Managed API + planner worker ARNs, plus expected child agent ARNs (requires Lambdas applied)."
   value = merge(
     {
       api            = module.lambda.api_function_arn

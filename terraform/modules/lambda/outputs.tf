@@ -1,11 +1,3 @@
-output "ecr_repository_url" {
-  value = module.ecr.repository_url
-}
-
-output "ecr_repository_name" {
-  value = module.ecr.repository_name
-}
-
 output "api_function_name" {
   value = module.compute.api_function_name
 }

@@ -10,3 +10,8 @@ variable "child_lambda_invoke_arns" {
   type        = list(string)
   description = "Concrete function ARNs the planner may invoke (no wildcards)"
 }
+
+variable "ecr_repository_arn" {
+  type        = string
+  description = "Private ECR repo ARN for Lambda image pull (BatchGetImage, etc.)"
+}

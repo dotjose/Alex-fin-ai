@@ -1,9 +1,4 @@
-# ECR + API/worker Lambda (container) + API Gateway → Lambda integration.
-module "ecr" {
-  source      = "../ecr_api"
-  name_prefix = var.name_prefix
-}
-
+# API/worker Lambda (container from private ECR) + API Gateway → Lambda integration.
 module "compute" {
   source                 = "../compute_lambdas"
   api_function_name      = var.api_function_name
@@ -28,4 +23,5 @@ module "http_api" {
   api_execution_arn    = var.api_execution_arn
   lambda_invoke_arn    = module.compute.api_invoke_arn
   lambda_function_name = module.compute.api_function_name
+  depends_on           = [module.compute]
 }

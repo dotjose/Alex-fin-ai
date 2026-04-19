@@ -1,7 +1,3 @@
-variable "name_prefix" {
-  type = string
-}
-
 variable "api_function_name" { type = string }
 variable "worker_function_name" { type = string }
 variable "api_role_arn" { type = string }

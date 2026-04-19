@@ -5,9 +5,12 @@ resource "aws_lambda_function" "api" {
   image_uri     = var.api_image_uri
   timeout       = var.api_timeout_seconds
   memory_size   = var.api_memory_mb
+  architectures = ["x86_64"]
+
   environment {
     variables = var.environment
   }
+
   image_config {
     command = var.api_image_command
   }
@@ -20,9 +23,12 @@ resource "aws_lambda_function" "worker" {
   image_uri     = var.worker_image_uri
   timeout       = var.worker_timeout_seconds
   memory_size   = var.worker_memory_mb
+  architectures = ["x86_64"]
+
   environment {
     variables = var.environment
   }
+
   image_config {
     command = var.worker_image_command
   }
@@ -35,4 +41,6 @@ resource "aws_lambda_event_source_mapping" "worker_sqs" {
   maximum_batching_window_in_seconds = 0
   enabled                            = true
   function_response_types            = ["ReportBatchItemFailures"]
+
+  depends_on = [aws_lambda_function.worker]
 }
