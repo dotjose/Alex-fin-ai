@@ -185,13 +185,14 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def deferred_db_startup(request: Request, call_next):
-        p = request.url.path
+        # Normalize path so /api/health/ (trailing slash) does not skip DB init incorrectly.
+        p = (request.url.path or "/").rstrip("/") or "/"
         m = request.method
         skip = (
             p in ("/health", "/api/health")
             or (m == "GET" and p == "/api/user")
             or (m == "GET" and p == "/api/capabilities")
-            or (m == "GET" and p.startswith("/api/debug/"))
+            or (m == "GET" and (p == "/api/debug" or p.startswith("/api/debug/")))
         )
         if skip:
             return await call_next(request)
