@@ -90,7 +90,7 @@ class ClerkJWTBearer(HTTPBearer):
             cache_jwk_set=True,
             lifespan=300,
             headers=None,
-            timeout=30,
+            timeout=10,
         )
 
     def _decode(self, token: str) -> dict[str, Any]:
@@ -142,29 +142,44 @@ class ClerkJWTBearer(HTTPBearer):
             ) from e
 
     async def __call__(self, request: Request) -> Optional[HTTPAuthorizationCredentials]:
-        authorization = request.headers.get("Authorization")
-        scheme, credentials = get_authorization_scheme_param(authorization)
-        if not (authorization and scheme and credentials):
-            if self.auto_error:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Not authenticated.",
-                )
-            return None
-        if scheme.lower() != "bearer":
-            if self.auto_error:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid authentication scheme.",
-                )
-            return None
+        try:
+            authorization = request.headers.get("Authorization")
+            scheme, credentials = get_authorization_scheme_param(authorization)
+            if not (authorization and scheme and credentials):
+                if self.auto_error:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Not authenticated.",
+                    )
+                return None
+            if scheme.lower() != "bearer":
+                if self.auto_error:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid authentication scheme.",
+                    )
+                return None
 
-        decoded = self._decode(credentials)
-        return HTTPAuthorizationCredentials(
-            scheme=scheme,
-            credentials=credentials,
-            decoded=decoded,
-        )
+            decoded = self._decode(credentials)
+            sub = decoded.get("sub")
+            if isinstance(sub, str) and sub.strip():
+                request.state.clerk_sub = sub.strip()
+            return HTTPAuthorizationCredentials(
+                scheme=scheme,
+                credentials=credentials,
+                decoded=decoded,
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception(
+                "clerk_jwt_bearer_unexpected_error path=%s",
+                request.url.path,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication failed.",
+            ) from None
 
 
 def clerk_bearer(settings: Settings) -> ClerkJWTBearer:

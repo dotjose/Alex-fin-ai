@@ -26,8 +26,16 @@ class Settings(BaseSettings):
     )
 
     node_env: Literal["development", "production"] = Field(alias="NODE_ENV")
-    api_base_url: str = Field(alias="API_BASE_URL")
-    frontend_url: str = Field(alias="FRONTEND_URL")
+    # Browser-facing origins for CORS only. The API process does not perform outbound HTTP to these URLs.
+    # In production both may be the same CloudFront host (same-origin UI + /api); that is expected and safe.
+    api_base_url: str = Field(
+        alias="API_BASE_URL",
+        description="Public origin of this API for CORS. Not used for server-side HTTP self-calls.",
+    )
+    frontend_url: str = Field(
+        alias="FRONTEND_URL",
+        description="Origin of the Next.js UI for CORS. Not used for server-side HTTP self-calls.",
+    )
 
     clerk_jwt_issuer: str = Field(alias="CLERK_JWT_ISSUER")
     clerk_jwt_audience: str | None = Field(default=None, alias="CLERK_JWT_AUDIENCE")

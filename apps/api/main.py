@@ -103,30 +103,15 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health_check_api_prefix(request: Request):
-        """Liveness + optional DB probe (matches API Gateway / CloudFront /api/*)."""
-        base = _health_payload()
-        checks: dict[str, str] = {
-            "env": "ok",
-            "database": "skipped",
+        """ALB / API Gateway / CloudFront liveness: no DB, no outbound HTTP (instant 200)."""
+        return {
+            **_health_payload(),
+            "checks": {
+                "env": "ok",
+                "database": "not_checked",
+            },
+            "request_id": get_trace_id(request),
         }
-        try:
-            from services.supabase_client import get_database
-
-            def _ping_db() -> None:
-                get_database().users.find_by_clerk_id("__health_probe__")
-
-            await asyncio.wait_for(asyncio.to_thread(_ping_db), timeout=5.0)
-            checks["database"] = "ok"
-        except TimeoutError:
-            checks["database"] = "error:timeout"
-            base["status"] = "degraded"
-        except Exception as e:
-            checks["database"] = f"error:{type(e).__name__}"
-            base["status"] = "degraded"
-            logger.warning("api_health_db_probe_failed: %s", type(e).__name__)
-        base["checks"] = checks
-        base["request_id"] = getattr(request.state, "trace_id", None)
-        return base
 
     _db_startup_lock = threading.Lock()
     app.state.db_startup_complete = False
@@ -164,6 +149,7 @@ def create_app() -> FastAPI:
                     {
                         "event": "api_http_request",
                         "request_id": getattr(request.state, "trace_id", None),
+                        "user_id": getattr(request.state, "clerk_sub", None),
                         "endpoint": request.url.path,
                         "method": request.method,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -177,17 +163,20 @@ def create_app() -> FastAPI:
                 )
             )
             return response
-        except Exception:
+        except Exception as exc:
             ms = round((time.perf_counter() - t0) * 1000.0, 2)
             logger.info(
                 json.dumps(
                     {
                         "event": "api_http_request_error",
                         "request_id": getattr(request.state, "trace_id", None),
+                        "user_id": getattr(request.state, "clerk_sub", None),
                         "endpoint": request.url.path,
                         "method": request.method,
                         "duration_ms": ms,
                         "trace_header": trace_hdr,
+                        "failure_type": type(exc).__name__,
+                        "failure_message": str(exc)[:500],
                     },
                     default=str,
                 )
@@ -289,8 +278,9 @@ def create_app() -> FastAPI:
     async def general_exception_handler(request: Request, exc: Exception):
         tid = get_trace_id(request)
         logger.error(
-            "Unexpected error request_id=%s: %s",
+            "Unexpected error request_id=%s user_id=%s: %s",
             tid,
+            getattr(request.state, "clerk_sub", None),
             exc,
             exc_info=True,
         )
@@ -316,8 +306,12 @@ def _attach_minimal_handlers(app: FastAPI) -> FastAPI:
     expose_errors = _env_truthy("EXPOSE_API_ERRORS")
 
     @app.get("/api/health")
-    async def api_health_minimal():
-        return _health_payload()
+    async def api_health_minimal(request: Request):
+        return {
+            **_health_payload(),
+            "checks": {"env": "invalid_settings", "database": "not_checked"},
+            "request_id": get_trace_id(request),
+        }
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(request: Request, exc: RequestValidationError):
@@ -348,7 +342,13 @@ def _attach_minimal_handlers(app: FastAPI) -> FastAPI:
     @app.exception_handler(Exception)
     async def general_exception_handler(request: Request, exc: Exception):
         tid = get_trace_id(request)
-        logger.error("Unexpected error request_id=%s: %s", tid, exc, exc_info=True)
+        logger.error(
+            "Unexpected error request_id=%s user_id=%s: %s",
+            tid,
+            getattr(request.state, "clerk_sub", None),
+            exc,
+            exc_info=True,
+        )
         body = structured_error_json(
             request=request,
             message="An unexpected error occurred. Our team has been notified.",
