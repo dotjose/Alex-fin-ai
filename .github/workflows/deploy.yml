@@ -1,55 +1,95 @@
-# Infra-driven production deploy: ECR image → Terraform (remote state) → infra.json → Next build → S3 + CloudFront.
-# No production URLs in git; Terraform outputs are the contract for runtime and browser env.
+# Production deploy: ECR → Terraform (remote state) → infra.json → Next static export → S3 + CloudFront.
+#
+# Rules:
+# - Never use secrets.* inside job/step "if:" (GitHub rejects / leaks metadata). Use step outputs.
+# - PRs to main: CI only (tests + lint). Pushes to main + workflow_dispatch: full deploy + apply.
+# - URLs come only from terraform output -json (infra.json), never hardcoded.
 
 name: Deploy
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: deploy-production
+  group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
 
 jobs:
-  deploy:
+  ci:
+    name: CI (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Backend tests
+        working-directory: backend
+        run: uv sync && uv run pytest tests/ -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Frontend lint + typecheck
+        working-directory: frontend
+        run: npm ci && npm run lint && npm run typecheck
+
+  deploy-production:
+    name: Deploy (main / manual)
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
     steps:
-      - name: Preflight (vars + auth)
+      - uses: actions/checkout@v4
+
+      - name: Preflight (repository variables)
         env:
-          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION_VAR: ${{ vars.AWS_REGION }}
           TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
           TF_STATE_LOCK_TABLE: ${{ vars.TF_STATE_LOCK_TABLE }}
         run: |
           set -euo pipefail
-          if [ -z "${AWS_REGION_VAR:-}" ]; then echo "::error::Set repository variable AWS_REGION"; exit 1; fi
-          if [ -z "${TF_STATE_BUCKET:-}" ]; then echo "::error::Set repository variable TF_STATE_BUCKET"; exit 1; fi
-          if [ -z "${TF_STATE_LOCK_TABLE:-}" ]; then echo "::error::Set repository variable TF_STATE_LOCK_TABLE"; exit 1; fi
-          if [ -n "${AWS_ROLE_ARN:-}" ]; then
-            echo "AWS auth=OIDC"
-          elif [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
-            echo "AWS auth=access keys"
-          else
-            echo "::error::Set AWS_ROLE_ARN (OIDC) or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY"; exit 1
-          fi
+          if [ -z "${AWS_REGION_VAR:-}" ]; then echo "::error::Set variable AWS_REGION"; exit 1; fi
+          if [ -z "${TF_STATE_BUCKET:-}" ]; then echo "::error::Set variable TF_STATE_BUCKET"; exit 1; fi
+          if [ -z "${TF_STATE_LOCK_TABLE:-}" ]; then echo "::error::Set variable TF_STATE_LOCK_TABLE"; exit 1; fi
 
-      - uses: actions/checkout@v4
+      - name: Resolve AWS credential mode (outputs only — safe for if:)
+        id: aws_mode
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          use_oidc=false
+          use_keys=false
+          if [ -n "${AWS_ROLE_ARN:-}" ]; then use_oidc=true; fi
+          if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then use_keys=true; fi
+          echo "use_oidc=${use_oidc}" >> "$GITHUB_OUTPUT"
+          echo "use_static_keys=${use_keys}" >> "$GITHUB_OUTPUT"
+          if [ "$use_oidc" != true ] && [ "$use_keys" != true ]; then
+            echo "::error::Configure AWS_ROLE_ARN (OIDC) or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY secrets"
+            exit 1
+          fi
 
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
 
-      - name: Install and test (backend)
+      - name: Backend tests
         working-directory: backend
         run: uv sync && uv run pytest tests/ -q
 
@@ -59,19 +99,19 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install, lint, and typecheck (frontend)
+      - name: Frontend lint + typecheck
         working-directory: frontend
         run: npm ci && npm run lint && npm run typecheck
 
       - name: Configure AWS credentials (OIDC)
-        if: ${{ secrets.AWS_ROLE_ARN != '' }}
+        if: steps.aws_mode.outputs.use_oidc == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Configure AWS credentials (access keys)
-        if: ${{ secrets.AWS_ROLE_ARN == '' && secrets.AWS_ACCESS_KEY_ID != '' }}
+      - name: Configure AWS credentials (static keys)
+        if: steps.aws_mode.outputs.use_oidc != 'true' && steps.aws_mode.outputs.use_static_keys == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -94,7 +134,7 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Write Terraform S3 backend config (CI)
+      - name: Write Terraform S3 backend config
         working-directory: terraform
         env:
           BUCKET: ${{ vars.TF_STATE_BUCKET }}
@@ -163,14 +203,14 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve CloudFront URL (phase 2 inputs)
+      - name: Resolve CloudFront URL for phase 2
         id: public_urls
         working-directory: terraform
         run: |
           CF="$(terraform output -raw cloudfront_url)"
           echo "cloudfront_url=$CF" >> "$GITHUB_OUTPUT"
 
-      - name: Terraform plan (phase 2 — tighten CORS + Lambda public URLs)
+      - name: Terraform plan (phase 2)
         working-directory: terraform
         env:
           TF_VAR_aws_region: ${{ vars.AWS_REGION }}
@@ -205,7 +245,7 @@ jobs:
       - name: Terraform output JSON (infra.json)
         run: terraform -chdir=terraform output -json > "$GITHUB_WORKSPACE/infra.json"
 
-      - name: Assert critical Terraform outputs
+      - name: Assert Terraform outputs (infra contract)
         id: infra
         run: |
           set -euo pipefail
@@ -220,16 +260,17 @@ jobs:
           }
           API_BASE="$(need '.api_base_url.value' api_base_url)"
           CF_URL="$(need '.cloudfront_url.value' cloudfront_url)"
+          APIGW="$(need '.api_gateway_url.value' api_gateway_url)"
           SQS_URL="$(need '.sqs_queue_url.value' sqs_queue_url)"
           S3_BUCKET="$(need '.s3_bucket.value' s3_bucket)"
-          jq -e '.lambda_function_arns.value.api' "$INFRA" >/dev/null || { echo "::error::lambda_function_arns missing api"; exit 1; }
-          jq -e '.lambda_function_arns.value.planner_worker' "$INFRA" >/dev/null || { echo "::error::lambda_function_arns missing planner_worker"; exit 1; }
+          jq -e '.lambda_function_arns.value.api' "$INFRA" >/dev/null || { echo "::error::lambda_function_arns.api missing"; exit 1; }
+          jq -e '.lambda_function_arns.value.planner_worker' "$INFRA" >/dev/null || { echo "::error::lambda_function_arns.planner_worker missing"; exit 1; }
           echo "api_base_url=$API_BASE" >> "$GITHUB_OUTPUT"
           echo "cloudfront_url=$CF_URL" >> "$GITHUB_OUTPUT"
+          echo "api_gateway_url=$APIGW" >> "$GITHUB_OUTPUT"
           echo "sqs_queue_url=$SQS_URL" >> "$GITHUB_OUTPUT"
           echo "s3_bucket=$S3_BUCKET" >> "$GITHUB_OUTPUT"
-          echo "Lambda ARNs (managed keys):"
-          jq -r '.lambda_function_arns.value | to_entries[] | select(.key == "api" or .key == "planner_worker") | "\(.key)=\(.value)"' "$INFRA"
+          echo "infra_contract_ok=true" >> "$GITHUB_OUTPUT"
 
       - name: Build frontend (static export)
         working-directory: frontend
