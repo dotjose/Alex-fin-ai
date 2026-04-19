@@ -1,31 +1,6 @@
 locals {
   project = "alex"
-}
-
-resource "aws_apigatewayv2_api" "http" {
-  name          = "${local.project}-http-api"
-  protocol_type = "HTTP"
-
-  cors_configuration {
-    allow_credentials = false
-    allow_headers     = ["authorization", "content-type"]
-    allow_methods     = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"]
-    allow_origins = (
-      trimspace(var.cors_allow_origin_primary) != ""
-      ? [trimspace(var.cors_allow_origin_primary)]
-      : ["*"]
-    )
-    expose_headers = []
-    max_age        = 86400
-  }
-}
-
-locals {
-  name = local.project
-
-  api_base_effective = trimspace(var.api_base_url) != "" ? var.api_base_url : aws_apigatewayv2_api.http.api_endpoint
-
-  frontend_base_effective = trimspace(var.frontend_url) != "" ? var.frontend_url : local.api_base_effective
+  name    = local.project
 
   external_agent_arns = {
     tagger     = format("arn:aws:lambda:%s:%s:function:%s", data.aws_region.current.name, data.aws_caller_identity.current.account_id, var.tagger_function)
@@ -35,6 +10,10 @@ locals {
   }
 
   child_invoke_arn_list = values(local.external_agent_arns)
+
+  api_base_effective = trimspace(var.api_base_url) != "" ? var.api_base_url : module.api.api_endpoint
+
+  frontend_base_effective = trimspace(var.frontend_url) != "" ? var.frontend_url : local.api_base_effective
 
   lambda_env_core = {
     NODE_ENV                      = var.node_env
@@ -57,8 +36,8 @@ locals {
     AWS_REGION                    = var.aws_region
     AWS_REGION_NAME               = var.aws_region
     DEFAULT_AWS_REGION            = var.aws_region
-    SQS_QUEUE_URL                 = module.sqs.queue_url
-    S3_BUCKET_UI                  = module.s3_ui.bucket_id
+    SQS_QUEUE_URL                 = module.worker.queue_url
+    S3_BUCKET_UI                  = module.frontend.bucket_id
     TAGGER_FUNCTION               = var.tagger_function
     REPORTER_FUNCTION             = var.reporter_function
     CHARTER_FUNCTION              = var.charter_function
@@ -85,22 +64,40 @@ locals {
   )
 }
 
-module "sqs" {
-  source                     = "./modules/sqs_agent_queue"
+module "network" {
+  source = "./modules/network"
+}
+
+module "api" {
+  source                    = "./modules/api"
+  name_prefix               = local.name
+  cors_allow_origin_primary = var.cors_allow_origin_primary
+}
+
+module "worker" {
+  source                     = "./modules/worker"
   name_prefix                = local.name
   visibility_timeout_seconds = 910
   max_receive_count          = 3
 }
 
-module "s3_ui" {
-  source      = "./modules/s3_ui"
-  bucket_name = "${local.name}-ui-${data.aws_caller_identity.current.account_id}"
+module "frontend" {
+  source                 = "./modules/frontend"
+  name_prefix            = local.name
+  comment                = "${local.name} UI + API (private S3 + OAC)"
+  ui_bucket_name         = "${local.name}-ui-${data.aws_caller_identity.current.account_id}"
+  http_api_origin_domain = replace(module.api.api_endpoint, "https://", "")
+}
+
+module "ecr" {
+  source      = "./modules/ecr_api"
+  name_prefix = local.name
 }
 
 module "iam" {
   source                   = "./modules/iam_agent_runtime"
   name_prefix              = local.name
-  queue_arn                = module.sqs.queue_arn
+  queue_arn                = module.worker.queue_arn
   child_lambda_invoke_arns = local.child_invoke_arn_list
 }
 
@@ -117,7 +114,7 @@ data "aws_iam_policy_document" "sqs_queue_access" {
       "sqs:GetQueueAttributes",
       "sqs:GetQueueUrl",
     ]
-    resources = [module.sqs.queue_arn]
+    resources = [module.worker.queue_arn]
   }
 
   statement {
@@ -134,12 +131,12 @@ data "aws_iam_policy_document" "sqs_queue_access" {
       "sqs:ChangeMessageVisibility",
       "sqs:GetQueueUrl",
     ]
-    resources = [module.sqs.queue_arn]
+    resources = [module.worker.queue_arn]
   }
 }
 
 resource "aws_sqs_queue_policy" "main" {
-  queue_url = module.sqs.queue_id
+  queue_url = module.worker.queue_id
   policy    = data.aws_iam_policy_document.sqs_queue_access.json
 }
 
@@ -151,7 +148,7 @@ module "compute" {
   worker_role_arn        = module.iam.worker_role_arn
   api_image_uri          = var.api_image_uri
   worker_image_uri       = var.worker_image_uri
-  queue_arn              = module.sqs.queue_arn
+  queue_arn              = module.worker.queue_arn
   environment            = local.lambda_env
   api_timeout_seconds    = 30
   api_memory_mb          = 1024
@@ -162,20 +159,9 @@ module "compute" {
 
 module "http_api" {
   source               = "./modules/http_api_lambda"
-  api_id               = aws_apigatewayv2_api.http.id
-  api_execution_arn    = aws_apigatewayv2_api.http.execution_arn
+  api_id               = module.api.id
+  api_execution_arn    = module.api.execution_arn
   lambda_invoke_arn    = module.compute.api_invoke_arn
   lambda_function_name = module.compute.api_function_name
-  depends_on           = [module.compute, aws_apigatewayv2_api.http]
-}
-
-module "cdn" {
-  source                  = "./modules/cdn_ui_api"
-  name_prefix             = local.name
-  comment                 = "${local.name} UI + API (private S3 + OAC)"
-  s3_bucket_id            = module.s3_ui.bucket_id
-  s3_bucket_arn           = module.s3_ui.bucket_arn
-  s3_regional_domain_name = module.s3_ui.bucket_regional_domain_name
-  http_api_origin_domain  = replace(aws_apigatewayv2_api.http.api_endpoint, "https://", "")
-  depends_on              = [module.s3_ui, aws_apigatewayv2_api.http]
+  depends_on           = [module.compute, module.api]
 }

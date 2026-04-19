@@ -1,10 +1,9 @@
-# Production deploy: ECR digest → Terraform (remote S3 state) → infra.json → Next build → S3 sync --delete → CloudFront invalidation.
+# Production deploy: self-bootstrap Terraform state → main stack → ECR image → CORS tighten → infra.json → Next → S3 → CloudFront.
 #
 # Rules:
-# - Never use secrets.* (or vars.* that indirectly embed secrets) in step/job "if:". Use step outputs only.
-# - AWS auth: exactly one mode via repository variable AWS_AUTH_MODE = "oidc" | "keys" (default oidc when unset).
-# - Remote state: bucket/table/key come from GitHub repository variables (not Terraform variables).
-# - Public URLs for the browser: only from terraform output -json (infra.json), never hardcoded in the repo.
+# - No secrets.* in job/step "if:" (use steps.aws_auth.outputs.mode only).
+# - Remote state bucket + lock table are created by Terraform bootstrap (no TF_STATE_* GitHub variables).
+# - Public URLs: only terraform output -json (infra.json). Clerk publishable key: single secret NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY.
 
 name: Deploy
 
@@ -18,9 +17,6 @@ on:
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
-
-env:
-  AWS_REGION: ${{ vars.AWS_REGION }}
 
 jobs:
   ci:
@@ -54,39 +50,35 @@ jobs:
       id-token: write
       contents: read
     env:
-      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_node_env: production
       TF_VAR_clerk_secret_key: ${{ secrets.CLERK_SECRET_KEY }}
       TF_VAR_supabase_url: ${{ secrets.SUPABASE_URL }}
       TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       TF_VAR_supabase_database_url: ${{ secrets.SUPABASE_DATABASE_URL }}
       TF_VAR_openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
-      TF_VAR_or_model_simple: ${{ vars.OR_MODEL_SIMPLE }}
-      TF_VAR_or_model_fast: ${{ vars.OR_MODEL_FAST }}
-      TF_VAR_or_model_reasoning: ${{ vars.OR_MODEL_REASONING }}
-      TF_VAR_or_model_embedding: ${{ vars.OR_MODEL_EMBEDDING }}
       TF_VAR_polygon_api_key: ${{ secrets.POLYGON_API_KEY }}
       TF_VAR_langfuse_public_key: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
       TF_VAR_langfuse_secret_key: ${{ secrets.LANGFUSE_SECRET_KEY }}
-      TF_VAR_langfuse_host: ${{ vars.LANGFUSE_HOST }}
       TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
       TF_VAR_clerk_jwt_issuer: ${{ secrets.CLERK_JWT_ISSUER }}
       TF_VAR_clerk_jwt_audience: ${{ secrets.CLERK_JWT_AUDIENCE }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Preflight (repository variables for state + region)
+      - name: Preflight (AWS region for bootstrap + providers)
         env:
-          AWS_REGION_VAR: ${{ vars.AWS_REGION }}
-          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TF_STATE_LOCK_TABLE: ${{ vars.TF_STATE_LOCK_TABLE }}
+          R: ${{ vars.AWS_REGION }}
         run: |
           set -euo pipefail
-          if [ -z "${AWS_REGION_VAR:-}" ]; then echo "::error::Set GitHub repository variable AWS_REGION"; exit 1; fi
-          if [ -z "${TF_STATE_BUCKET:-}" ]; then echo "::error::Set GitHub repository variable TF_STATE_BUCKET (S3 bucket for Terraform state)"; exit 1; fi
-          if [ -z "${TF_STATE_LOCK_TABLE:-}" ]; then echo "::error::Set GitHub repository variable TF_STATE_LOCK_TABLE (DynamoDB table for state locking)"; exit 1; fi
+          if [ -n "${R:-}" ]; then
+            echo "AWS_REGION=$R" >> "$GITHUB_ENV"
+            echo "TF_VAR_aws_region=$R" >> "$GITHUB_ENV"
+          else
+            echo "AWS_REGION=us-east-1" >> "$GITHUB_ENV"
+            echo "TF_VAR_aws_region=us-east-1" >> "$GITHUB_ENV"
+          fi
 
-      - name: Resolve AWS auth mode (output only — safe for if:)
+      - name: Resolve AWS auth mode (outputs only — safe for if:)
         id: aws_auth
         env:
           RAW_MODE: ${{ vars.AWS_AUTH_MODE }}
@@ -155,57 +147,58 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: aws-actions/amazon-ecr-login@v2
-        id: ecr
-
-      - name: Build and push API image (ECR digest pinned for Lambda)
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY }}
-          TAG: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          if [ -z "${REPO:-}" ]; then echo "::error::Set secret ECR_REPOSITORY to the ECR repository name (not a URL)"; exit 1; fi
-          IMAGE_TAG="${REGISTRY}/${REPO}:${TAG}"
-          docker build -f apps/api/Dockerfile -t "$IMAGE_TAG" .
-          docker push "$IMAGE_TAG"
-          DIGEST="$(aws ecr describe-images --repository-name "$REPO" --region "${AWS_REGION}" \
-            --image-ids "imageTag=${TAG}" --query 'imageDetails[0].imageDigest' --output text)"
-          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
-            echo "::error::Could not resolve ECR image digest for ${REPO}:${TAG}"
-            exit 1
-          fi
-          echo "IMAGE_URI=${REGISTRY}/${REPO}@${DIGEST}" >> "$GITHUB_ENV"
-
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
 
-      - name: Cache Terraform plugins
-        uses: actions/cache@v4
-        with:
-          path: terraform/.terraform
-          key: ${{ runner.os }}-terraform-${{ hashFiles('terraform/.terraform.lock.hcl') }}
-
-      - name: Write Terraform S3 backend config (from repository variables)
-        working-directory: terraform
-        env:
-          BUCKET: ${{ vars.TF_STATE_BUCKET }}
-          TABLE: ${{ vars.TF_STATE_LOCK_TABLE }}
-          KEY: ${{ vars.TF_STATE_KEY }}
-          AWS_REGION_VALUE: ${{ vars.AWS_REGION }}
+      - name: Terraform bootstrap (S3 state bucket + DynamoDB lock; state self-persisted in S3)
         run: |
           set -euo pipefail
-          STATE_KEY="${KEY:-alex-financial-adviser/terraform.tfstate}"
-          cat > cideploy.backend.hcl <<EOF
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          REG_SLUG="${AWS_REGION//-/}"
+          STATE_BUCKET="alexfin-tfstate-${ACCOUNT}-${REG_SLUG}"
+          echo "STATE_BUCKET=$STATE_BUCKET" >> "$GITHUB_ENV"
+          META_KEY="_meta/bootstrap/terraform.tfstate"
+          BOOT_DIR="${GITHUB_WORKSPACE}/terraform/bootstrap"
+          cd "$BOOT_DIR"
+          cp "${GITHUB_WORKSPACE}/terraform/.terraform.lock.hcl" ./.terraform.lock.hcl
+          if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+            aws s3 cp "s3://${STATE_BUCKET}/${META_KEY}" ./terraform.tfstate 2>/dev/null || true
+          fi
+          ok=false
+          for attempt in 1 2 3; do
+            if terraform init -backend=false -input=false; then ok=true; break; fi
+            echo "bootstrap init failed attempt $attempt"; sleep 10
+          done
+          if [ "$ok" != true ]; then echo "::error::bootstrap terraform init failed"; exit 1; fi
+          ok=false
+          for attempt in 1 2 3; do
+            if terraform apply -auto-approve -input=false -var="aws_region=${AWS_REGION}"; then ok=true; break; fi
+            echo "bootstrap apply failed attempt $attempt"; sleep 20
+          done
+          if [ "$ok" != true ]; then echo "::error::bootstrap terraform apply failed"; exit 1; fi
+          aws s3 cp ./terraform.tfstate "s3://${STATE_BUCKET}/${META_KEY}"
+
+      - name: Write main stack S3 backend config (from bootstrap outputs)
+        run: |
+          set -euo pipefail
+          BUCKET="$(terraform -chdir="${GITHUB_WORKSPACE}/terraform/bootstrap" output -raw state_bucket)"
+          TABLE="$(terraform -chdir="${GITHUB_WORKSPACE}/terraform/bootstrap" output -raw lock_table)"
+          cat > "${GITHUB_WORKSPACE}/terraform/cideploy.backend.hcl" <<EOF
           bucket         = "${BUCKET}"
-          key            = "${STATE_KEY}"
-          region         = "${AWS_REGION_VALUE}"
+          key            = "alex-financial-adviser/main/terraform.tfstate"
+          region         = "${AWS_REGION}"
           dynamodb_table = "${TABLE}"
           encrypt        = true
           EOF
 
-      - name: Terraform init
+      - name: Cache Terraform plugins (main stack)
+        uses: actions/cache@v4
+        with:
+          path: terraform/.terraform
+          key: ${{ runner.os }}-terraform-main-${{ hashFiles('terraform/.terraform.lock.hcl') }}
+
+      - name: Terraform init (main stack, remote state)
         working-directory: terraform
         run: terraform init -input=false -backend-config=cideploy.backend.hcl
 
@@ -213,11 +206,9 @@ jobs:
         working-directory: terraform
         run: terraform validate
 
-      - name: Terraform plan (phase 1 — infra without CloudFront-scoped CORS)
+      - name: Terraform plan (phase 1 — placeholder Lambda images + permissive CORS)
         working-directory: terraform
         env:
-          TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
           TF_VAR_api_base_url: ""
           TF_VAR_frontend_url: ""
           TF_VAR_cors_allow_origin_primary: ""
@@ -226,8 +217,6 @@ jobs:
       - name: Terraform apply (phase 1, with retries)
         working-directory: terraform
         env:
-          TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
           TF_VAR_api_base_url: ""
           TF_VAR_frontend_url: ""
           TF_VAR_cors_allow_origin_primary: ""
@@ -240,7 +229,72 @@ jobs:
             echo "Terraform apply phase 1 failed (attempt ${attempt}); backing off 30s..."
             sleep 30
           done
-          echo "::error::Terraform apply phase 1 failed after 3 attempts"
+          exit 1
+
+      - name: Export ECR coordinates
+        id: ecr_meta
+        working-directory: terraform
+        run: |
+          set -euo pipefail
+          url="$(terraform output -raw ecr_repository_url)"
+          name="$(terraform output -raw ecr_repository_name)"
+          registry="${url%%/*}"
+          echo "repository_url=$url" >> "$GITHUB_OUTPUT"
+          echo "repository_name=$name" >> "$GITHUB_OUTPUT"
+          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Amazon ECR
+        env:
+          REGISTRY: ${{ steps.ecr_meta.outputs.registry }}
+        run: |
+          set -euo pipefail
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REGISTRY}"
+
+      - name: Build and push API image (digest-pinned)
+        env:
+          REPO_URL: ${{ steps.ecr_meta.outputs.repository_url }}
+          REPO_NAME: ${{ steps.ecr_meta.outputs.repository_name }}
+          TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          IMAGE_TAG="${REPO_URL}:${TAG}"
+          docker build -f apps/api/Dockerfile -t "$IMAGE_TAG" .
+          docker push "$IMAGE_TAG"
+          DIGEST="$(aws ecr describe-images --repository-name "$REPO_NAME" --region "${AWS_REGION}" \
+            --image-ids "imageTag=${TAG}" --query 'imageDetails[0].imageDigest' --output text)"
+          if [ -z "$DIGEST" ] || [ "$DIGEST" = "None" ]; then
+            echo "::error::Could not resolve ECR image digest"
+            exit 1
+          fi
+          echo "IMAGE_URI=${REPO_URL}@${DIGEST}" >> "$GITHUB_ENV"
+
+      - name: Terraform plan (phase 1b — Lambda images from ECR digest)
+        working-directory: terraform
+        env:
+          TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
+          TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
+          TF_VAR_api_base_url: ""
+          TF_VAR_frontend_url: ""
+          TF_VAR_cors_allow_origin_primary: ""
+        run: terraform plan -out=tfplan1b -input=false
+
+      - name: Terraform apply (phase 1b, with retries)
+        working-directory: terraform
+        env:
+          TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
+          TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
+          TF_VAR_api_base_url: ""
+          TF_VAR_frontend_url: ""
+          TF_VAR_cors_allow_origin_primary: ""
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if terraform apply -auto-approve -input=false tfplan1b; then
+              exit 0
+            fi
+            echo "Terraform apply phase 1b failed (attempt ${attempt}); backing off 30s..."
+            sleep 30
+          done
           exit 1
 
       - name: Verify SQS → Lambda mapping
@@ -254,7 +308,7 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve CloudFront URL for phase 2 (CORS + Lambda env)
+      - name: Resolve CloudFront URL for phase 2 (CORS + Lambda public URLs)
         id: public_urls
         working-directory: terraform
         run: |
@@ -262,7 +316,7 @@ jobs:
           CF="$(terraform output -raw cloudfront_url)"
           echo "cloudfront_url=$CF" >> "$GITHUB_OUTPUT"
 
-      - name: Terraform plan (phase 2 — CORS + public URLs from CloudFront)
+      - name: Terraform plan (phase 2 — lock CORS + API_BASE_URL to CloudFront)
         working-directory: terraform
         env:
           TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
@@ -289,13 +343,12 @@ jobs:
             echo "Terraform apply phase 2 failed (attempt ${attempt}); backing off 30s..."
             sleep 30
           done
-          echo "::error::Terraform apply phase 2 failed after 3 attempts"
           exit 1
 
       - name: Terraform output JSON (infra contract)
         run: terraform -chdir=terraform output -json > "$GITHUB_WORKSPACE/infra.json"
 
-      - name: Assert Terraform outputs and derive Next public API URL
+      - name: Assert Terraform outputs (single source of truth for Next + deploy)
         id: infra
         env:
           NEXT_PUBLIC_API_ORIGIN: ${{ vars.NEXT_PUBLIC_API_ORIGIN }}
@@ -314,8 +367,7 @@ jobs:
           CF_URL="$(need '.cloudfront_url.value' cloudfront_url)"
           APIGW="$(need '.api_gateway_url.value' api_gateway_url)"
           SQS_URL="$(need '.sqs_queue_url.value' sqs_queue_url)"
-          S3_UI="$(jq -e -r '(.s3_bucket_ui.value // .s3_bucket.value)' "$INFRA")" || { echo "::error::Missing s3_bucket_ui / s3_bucket"; exit 1; }
-          if [ -z "$S3_UI" ] || [ "$S3_UI" = "null" ]; then echo "::error::Empty S3 UI bucket output"; exit 1; fi
+          S3_UI="$(jq -e -r '(.ui_bucket_name.value // .s3_bucket_ui.value // .s3_bucket.value)' "$INFRA")" || { echo "::error::Missing UI bucket output"; exit 1; }
           jq -e '.lambda_function_arns.value.api' "$INFRA" >/dev/null || { echo "::error::lambda_function_arns.api missing"; exit 1; }
           jq -e '.lambda_function_arns.value.planner_worker' "$INFRA" >/dev/null || { echo "::error::lambda_function_arns.planner_worker missing"; exit 1; }
           ORIGIN="${NEXT_PUBLIC_API_ORIGIN:-cloudfront}"
@@ -334,7 +386,6 @@ jobs:
             echo "sqs_queue_url=$SQS_URL"
             echo "s3_bucket_ui=$S3_UI"
             echo "next_public_api_url=$NEXT_PUBLIC_API_URL"
-            echo "infra_contract_ok=true"
           } >> "$GITHUB_OUTPUT"
 
       - name: Build frontend (production)
@@ -343,13 +394,11 @@ jobs:
           NODE_ENV: production
           NEXT_PUBLIC_API_URL: ${{ steps.infra.outputs.next_public_api_url }}
           NEXT_PUBLIC_APP_URL: ${{ steps.infra.outputs.cloudfront_url }}
-          CLERK_PK_A: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          CLERK_PK_B: ${{ secrets.CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
         run: |
           set -euo pipefail
-          export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY="${CLERK_PK_A:-${CLERK_PK_B}}"
-          if [ -z "$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" ]; then
-            echo "::error::Set secret NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY (or legacy CLERK_PUBLISHABLE_KEY)"
+          if [ -z "${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}" ]; then
+            echo "::error::Set repository secret NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"
             exit 1
           fi
           npm run build
@@ -359,7 +408,7 @@ jobs:
           S3_BUCKET: ${{ steps.infra.outputs.s3_bucket_ui }}
         run: aws s3 sync "$GITHUB_WORKSPACE/frontend/out/" "s3://${S3_BUCKET}/" --delete --region "${AWS_REGION}"
 
-      - name: Invalidate CloudFront (only after successful upload; with retries)
+      - name: Invalidate CloudFront (after successful upload; with retries)
         working-directory: terraform
         run: |
           set -euo pipefail

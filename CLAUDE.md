@@ -353,7 +353,7 @@ The most common issues relate to AWS region choices! Check environment variables
 
 **Diagnosis**:
 1. Open the workflow run in GitHub → expand the failed step.
-2. Verify `AWS_ROLE_ARN`, `ECR_REPOSITORY`, and all `TF_VAR_*` inputs from `terraform/variables.tf`.
+2. Verify `AWS_ROLE_ARN` (or static key secrets), GitHub `vars.AWS_REGION`, and all `TF_VAR_*` inputs from `terraform/variables.tf`. ECR is created by Terraform (`ecr_repository_url` output); no `ECR_REPOSITORY` secret.
 3. Confirm the AWS account has ECR, Lambda, API Gateway, S3, CloudFront permissions.
 
 **Solution**: Fix repository secrets/vars and re-run the workflow. There is no supported local zip or `deploy.py` path.

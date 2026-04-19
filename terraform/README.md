@@ -1,55 +1,71 @@
-# Terraform (modular AWS)
+# Terraform (AWS, modular)
 
-Layout:
+## Remote state (self-managed)
+
+There is **no** pre-created S3 bucket for Terraform state.
+
+1. **`terraform/bootstrap/`** — applies `modules/state_bootstrap` using **local** `terraform.tfstate` in that directory. It creates:
+   - S3 bucket: `alexfin-tfstate-<account_id>-<region_slug>` (region slug = AWS region with `-` removed, e.g. `useast1`)
+   - DynamoDB table: `alexfin-tflocks-<account_id>-<region_slug>`
+2. **GitHub Actions** copies that local state object to `s3://<state-bucket>/_meta/bootstrap/terraform.tfstate` after each bootstrap apply so the next run can **restore** it (bootstrap stays idempotent).
+3. **`terraform/` (main stack)** uses `backend "s3"` with partial config written at apply time as `cideploy.backend.hcl` (gitignored), pointing at the bucket and lock table from bootstrap outputs.
+
+Local development against real AWS: copy `backend.example.hcl` to `backend.local.hcl`, set `bucket` / `dynamodb_table` from bootstrap outputs (or reuse the same bucket after one CI run), then `terraform init -backend-config=backend.local.hcl -reconfigure`.
+
+## Layout
 
 | Path | Role |
 |------|------|
-| `versions.tf` / `providers.tf` | Backend + AWS provider |
-| `main.tf` | Composition: HTTP API shell, SQS, S3, IAM, Lambdas, HTTP integration, CDN |
-| `modules/sqs_agent_queue` | Main queue + DLQ, SSE, redrive |
-| `modules/s3_ui` | Private UI bucket (encryption, blocked public access) |
-| `modules/iam_agent_runtime` | Split roles: API = SQS send only; worker = SQS consume + scoped `lambda:InvokeFunction` |
-| `modules/compute_lambdas` | Container API + planner worker + SQS event source mapping |
-| `modules/http_api_lambda` | API Gateway → Lambda integration (API resource lives in root to break graph cycles) |
-| `modules/cdn_ui_api` | CloudFront + S3 OAC + bucket policy (CloudFront-only `s3:GetObject`) |
+| `bootstrap/` | One-shot stack: state bucket + lock table only |
+| `modules/state_bootstrap/` | S3 + DynamoDB for Terraform remote state |
+| `modules/network/` | Availability zones (substrate for future VPC work) |
+| `modules/api/` | HTTP API (API Gateway v2) + CORS |
+| `modules/worker/` | SQS main queue + DLQ (wraps `sqs_agent_queue`) |
+| `modules/frontend/` | UI S3 + CloudFront + OAC (wraps `s3_ui` + `cdn_ui_api`) |
+| `modules/ecr_api/` | Private ECR repository for the API/worker image |
+| `modules/iam_agent_runtime/` | Split IAM: API vs worker |
+| `modules/compute_lambdas/` | Container Lambdas + SQS event source mapping |
+| `modules/http_api_lambda/` | API Gateway → Lambda integration |
+| `main.tf` | Root composition |
 
-## GitHub repository variables (required for CI)
+## GitHub (CI)
 
-These are **not** Terraform variables; the workflow writes `terraform/cideploy.backend.hcl` from them and fails preflight if they are missing.
+**Repository variable (optional):** `AWS_REGION` — defaults to `us-east-1` in the workflow if unset.
 
-| Variable | Purpose |
-|----------|---------|
-| `AWS_REGION` | AWS region for providers, ECR, S3 sync, and remote state bucket |
-| `TF_STATE_BUCKET` | S3 bucket holding the Terraform state object |
-| `TF_STATE_LOCK_TABLE` | DynamoDB table used for state locking |
-| `TF_STATE_KEY` | Optional. State object key inside the bucket (default: `alex-financial-adviser/terraform.tfstate`) |
-| `AWS_AUTH_MODE` | Optional. `oidc` (default) or `keys`. Selects **one** AWS credential mechanism for the deploy job |
-| `NEXT_PUBLIC_API_ORIGIN` | Optional. `cloudfront` (default) or `apigateway`. Chooses which Terraform output feeds `NEXT_PUBLIC_API_URL` at build time |
-| `OR_MODEL_SIMPLE`, `OR_MODEL_FAST`, `OR_MODEL_REASONING` | OpenRouter model ids for Lambda |
-| `OR_MODEL_EMBEDDING` | Optional embedding model id |
-| `LANGFUSE_HOST` | Optional Langfuse host when tracing secrets are set |
+**Optional:** `AWS_AUTH_MODE` (`oidc` default, or `keys`), `NEXT_PUBLIC_API_ORIGIN` (`cloudfront` default, or `apigateway`), OpenRouter model `vars.*`, `LANGFUSE_HOST`.
+
+**Not used:** `TF_STATE_BUCKET`, `TF_STATE_LOCK_TABLE`, `TF_STATE_KEY`, `ECR_REPOSITORY`.
+
+Secrets and `TF_VAR_*` wiring are documented in `.github/workflows/deploy.yml`.
 
 ## Outputs → CI (`infra.json`)
 
-Stable keys: `cloudfront_url`, `api_base_url`, `sqs_queue_url`, `s3_bucket`, `s3_bucket_ui`, `api_gateway_endpoint`, `api_gateway_url`, `lambda_function_arns` (map: `api`, `planner_worker`, plus **expected** child function ARNs for tagger/reporter/charter/retirement — those functions must exist and use a compatible image, or invokes fail).
+Stable keys include: `cloudfront_url`, `api_base_url`, `sqs_queue_url`, `s3_bucket_ui`, `ui_bucket_name`, `ecr_repository_url`, `ecr_repository_name`, `api_gateway_url`, `lambda_function_arns` (`api`, `planner_worker`, plus **expected** child agent ARNs).
+
+## IAM for the deploy role (OIDC or keys)
+
+The role/user running CI needs at least:
+
+- **Bootstrap:** `s3:CreateBucket`, `s3:PutBucketVersioning`, `s3:PutEncryptionConfiguration`, `s3:PutBucketPublicAccessBlock`, `s3:GetObject`/`PutObject`/`DeleteObject`/`ListBucket` on `arn:aws:s3:::alexfin-tfstate-*` and objects (state + `_meta/bootstrap/*`).
+- **DynamoDB:** create/describe/update on lock tables matching `alexfin-tflocks-*`.
+- **Main stack:** standard permissions for Lambda, API Gateway v2, CloudFront, SQS, IAM, ECR, S3 (application buckets), etc.
+
+Tighten ARNs once the first bootstrap run has created the real bucket and table names.
 
 ## State migration
 
-If you previously applied the **flat** `main.tf` layout, resource addresses changed (modules). Either:
-
-- Apply from a **fresh** remote state (destroy old stack first in a throwaway account), or  
-- Use `terraform state mv` / `moved` blocks to map old resources into modules (account-specific; not committed here).
+If you previously applied an older root module layout, resource addresses may have changed. Use a fresh account/region, or `terraform state mv` / `moved` blocks (not committed here).
 
 ## Env & secrets
 
-- **Terraform / Lambda**: `OPENROUTER_API_KEY`, Supabase, `CLERK_JWT_ISSUER`, optional `CLERK_SECRET_KEY`, `SQS_QUEUE_URL`, `S3_BUCKET_UI`, model env, etc. — passed as `TF_VAR_*` / Lambda `environment` only from CI secrets.
-- **Next.js build**: `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_APP_URL` from outputs; Clerk **publishable** key only — never `CLERK_SECRET_KEY` in the frontend job.
+- **Lambda:** Supabase, OpenRouter, `CLERK_JWT_ISSUER`, optional `CLERK_SECRET_KEY`, `SQS_QUEUE_URL`, `S3_BUCKET_UI`, `API_BASE_URL`, `FRONTEND_URL` — set from Terraform `locals.lambda_env` fed by `TF_VAR_*` in CI. `API_BASE_URL` / `FRONTEND_URL` / CORS are re-applied after `cloudfront_url` is known (two-phase apply in CI).
+- **Next.js build:** `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_APP_URL` from `terraform output -json` only; `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` from the **single** GitHub secret of that name.
 
 ## Infra risks (read before prod)
 
-1. **Child agent Lambdas** (`alex-tagger`, `alex-reporter`, …) are **not** defined in this stack; IAM allows invoke only on those concrete ARNs. You must deploy those functions separately (container/zip) with handlers that match the planner contract.
-2. **Single API image** only includes `planner` + `apps/api` paths in the Dockerfile; extending it to ship all agents in one image is a separate build change.
-3. **Private S3 + OAC**: direct `s3://` URLs are not public; only CloudFront serves the UI bucket.
-4. **No global 404→index.html** on CloudFront: doing so would break JSON `404`s from `/api/*`. Next static export should use real paths or a client router that matches exported routes.
+1. **Child agent Lambdas** (`alex-tagger`, …) are not defined in this stack; IAM allows invoke only on those ARNs. Deploy them separately or adjust `var.tagger_function` / IAM.
+2. **Placeholder Lambda images** use the public Lambda Python base image until the first successful ECR push in CI; the workflow immediately reapplies with the real digest.
+3. **Private S3 + OAC:** the UI bucket is not public; only CloudFront reads objects.
+4. **No global 404→index.html** on CloudFront (would break `/api/*` JSON 404s).
 
 See `.github/workflows/deploy.yml` for the canonical CI flow.

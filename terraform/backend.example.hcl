@@ -1,10 +1,12 @@
-# Copy to backend.local.hcl (gitignored) and run:
-#   terraform init -backend-config=backend.local.hcl -reconfigure
+# Optional: local / manual runs against the same remote state CI uses.
+# After one successful deploy, copy bucket and dynamodb_table from:
+#   terraform -chdir=bootstrap output
+# Or set bucket/table to the resources created by bootstrap (see terraform/README.md).
 #
-# CI generates cideploy.backend.hcl from GitHub Actions variables instead.
+# CI does not use this file; it writes cideploy.backend.hcl from bootstrap outputs.
 
-bucket         = "your-terraform-state-bucket"
-key            = "alex-financial-adviser/terraform.tfstate"
+bucket         = "REPLACE_WITH_BOOTSTRAP_state_bucket"
+key            = "alex-financial-adviser/main/terraform.tfstate"
 region         = "us-east-1"
-dynamodb_table = "your-terraform-locks-table"
+dynamodb_table = "REPLACE_WITH_BOOTSTRAP_lock_table"
 encrypt        = true

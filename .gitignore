@@ -224,6 +224,8 @@ terraform.tfstate.d/
 *.tfstate.backup
 terraform/cideploy.backend.hcl
 terraform/backend.local.hcl
+terraform/bootstrap/terraform.tfstate
+terraform/bootstrap/.terraform/
 /infra.json
 
 # Lambda deployment packages

@@ -6,12 +6,14 @@ variable "aws_region" {
 
 variable "api_image_uri" {
   type        = string
-  description = "ECR image URI for the FastAPI (Mangum) Lambda"
+  description = "Container image for the FastAPI (Mangum) Lambda. CI replaces with ECR digest after first push."
+  default     = "public.ecr.aws/lambda/python:3.12-x86_64"
 }
 
 variable "worker_image_uri" {
   type        = string
-  description = "ECR image URI for the SQS planner worker (same image digest as API is OK)"
+  description = "Container image for the SQS planner worker (same digest as API is typical)."
+  default     = "public.ecr.aws/lambda/python:3.12-x86_64"
 }
 
 variable "supabase_url" {
@@ -34,9 +36,23 @@ variable "openrouter_api_key" {
   sensitive = true
 }
 
-variable "or_model_simple" { type = string }
-variable "or_model_fast" { type = string }
-variable "or_model_reasoning" { type = string }
+variable "or_model_simple" {
+  type        = string
+  default     = "openai/gpt-4o-mini"
+  description = "OpenRouter model id (override via TF_VAR in CI)"
+}
+
+variable "or_model_fast" {
+  type        = string
+  default     = "openai/gpt-4o-mini"
+  description = "OpenRouter model id (override via TF_VAR in CI)"
+}
+
+variable "or_model_reasoning" {
+  type        = string
+  default     = "openai/gpt-4o"
+  description = "OpenRouter model id (override via TF_VAR in CI)"
+}
 
 variable "or_model_embedding" {
   type        = string
@@ -45,7 +61,9 @@ variable "or_model_embedding" {
 }
 
 variable "polygon_api_key" {
-  type = string
+  type        = string
+  default     = ""
+  description = "Optional market data key; empty disables Polygon-backed features that require it."
 }
 
 variable "langfuse_public_key" {
