@@ -83,6 +83,10 @@ output "lambda_function_arns" {
   )
 }
 
+output "lambda_api_function_name" {
+  value = local.lambda_api_name
+}
+
 output "planner_worker_lambda_name" {
   value = local.lambda_worker_name
 }

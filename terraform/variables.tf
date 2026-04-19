@@ -31,29 +31,43 @@ variable "ecr_repository_name_override" {
   description = "Optional ECR repository name override (passed to modules/ecr)."
 }
 
+variable "lambda_api_image_tag" {
+  type        = string
+  description = "ECR image tag when api_image_uri is empty (resolved as repository_url:tag). CI sets e.g. commitSha-api."
+  default     = ""
+}
+
+variable "lambda_worker_image_tag" {
+  type        = string
+  description = "ECR image tag when worker_image_uri is empty."
+  default     = ""
+}
+
 variable "api_image_uri" {
   type        = string
-  description = "Private ECR image URI for the API Lambda (CI digest or tag under account.dkr.ecr.*)."
+  description = "Optional full private ECR URI (overrides repository_url:lambda_api_image_tag when non-empty)."
   default     = ""
   validation {
     condition = (
       !var.enable_lambda_compute
-      || (var.api_image_uri != "" && can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/", var.api_image_uri)))
+      || trimspace(var.api_image_uri) == ""
+      || can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[^:]+(@sha256:[a-f0-9]{64}|:[a-zA-Z0-9._-]+)$", trimspace(var.api_image_uri)))
     )
-    error_message = "When enable_lambda_compute is true, api_image_uri must be a private ECR image URI."
+    error_message = "api_image_uri must be empty or a full private ECR URI (registry/...:tag or @sha256:...)."
   }
 }
 
 variable "worker_image_uri" {
   type        = string
-  description = "Private ECR image URI for the worker Lambda (separate image from worker Dockerfile in CI)."
+  description = "Optional full private ECR URI for worker (overrides repository_url:lambda_worker_image_tag when non-empty)."
   default     = ""
   validation {
     condition = (
       !var.enable_lambda_compute
-      || (var.worker_image_uri != "" && can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/", var.worker_image_uri)))
+      || trimspace(var.worker_image_uri) == ""
+      || can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[^:]+(@sha256:[a-f0-9]{64}|:[a-zA-Z0-9._-]+)$", trimspace(var.worker_image_uri)))
     )
-    error_message = "When enable_lambda_compute is true, worker_image_uri must be a private ECR image URI."
+    error_message = "worker_image_uri must be empty or a full private ECR URI."
   }
 }
 

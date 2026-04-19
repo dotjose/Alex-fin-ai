@@ -60,9 +60,26 @@ locals {
     trimspace(var.openai_api_key) != "" ? { OPENAI_API_KEY = var.openai_api_key } : {}
   )
 
+  lambda_api_tag_eff = trimspace(var.lambda_api_image_tag) != "" ? trimspace(var.lambda_api_image_tag) : "latest"
+  lambda_worker_tag_eff = (
+    trimspace(var.lambda_worker_image_tag) != "" ? trimspace(var.lambda_worker_image_tag) : "latest"
+  )
+
+  api_image_for_lambda = (
+    trimspace(var.api_image_uri) != ""
+    ? trimspace(var.api_image_uri)
+    : "${module.ecr.repository_url}:${local.lambda_api_tag_eff}"
+  )
+  worker_image_for_lambda = (
+    trimspace(var.worker_image_uri) != ""
+    ? trimspace(var.worker_image_uri)
+    : "${module.ecr.repository_url}:${local.lambda_worker_tag_eff}"
+  )
+
   lambda_api_arn     = join("", [for m in module.lambda : m.api_function_arn])
   lambda_worker_arn  = join("", [for m in module.lambda : m.worker_function_arn])
   lambda_worker_name = join("", [for m in module.lambda : m.worker_function_name])
+  lambda_api_name    = join("", [for m in module.lambda : m.api_function_name])
 }
 
 module "network" {
@@ -148,8 +165,8 @@ module "lambda" {
   worker_function_name   = "${local.name}-planner-worker"
   api_role_arn           = module.iam.api_role_arn
   worker_role_arn        = module.iam.worker_role_arn
-  api_image_uri          = var.api_image_uri
-  worker_image_uri       = var.worker_image_uri
+  api_image_uri          = local.api_image_for_lambda
+  worker_image_uri       = local.worker_image_for_lambda
   queue_arn              = module.sqs.queue_arn
   environment            = local.lambda_env
   api_timeout_seconds    = 30

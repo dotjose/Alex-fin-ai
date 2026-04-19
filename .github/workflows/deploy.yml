@@ -70,6 +70,19 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      - name: Detect existing remote-state bucket (idempotent bootstrap)
+        id: detect
+        run: |
+          set -euo pipefail
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          REG_SLUG="${AWS_REGION//-/}"
+          BUCKET="alex-terraform-state-${ACCOUNT}-${REG_SLUG}"
+          if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+            echo "bootstrap_adopt_bucket=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bootstrap_adopt_bucket=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Optional Terraform ECR mode (create | import)
         if: ${{ vars.ECR_REPOSITORY_CREATION_MODE != '' }}
         run: |
@@ -130,6 +143,8 @@ jobs:
 
       - name: Terraform bootstrap (S3 remote state + native state locking)
         id: bootstrap
+        env:
+          BOOTSTRAP_ADOPT: ${{ steps.detect.outputs.bootstrap_adopt_bucket }}
         run: |
           set -euo pipefail
           ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
@@ -140,6 +155,7 @@ jobs:
           BOOT_DIR="${GITHUB_WORKSPACE}/terraform/bootstrap"
           cd "$BOOT_DIR"
           cp "${GITHUB_WORKSPACE}/terraform/.terraform.lock.hcl" ./.terraform.lock.hcl
+          if [ "${BOOTSTRAP_ADOPT:-false}" = "true" ]; then ADOPT=true; else ADOPT=false; fi
           ok=false
           for attempt in 1 2 3; do
             if terraform init -backend=false -input=false; then ok=true; break; fi
@@ -148,7 +164,12 @@ jobs:
           if [ "$ok" != true ]; then echo "::error::bootstrap terraform init failed"; exit 1; fi
           ok=false
           for attempt in 1 2 3; do
-            if terraform apply -auto-approve -input=false -var="aws_region=${AWS_REGION}"; then ok=true; break; fi
+            if terraform apply -auto-approve -input=false \
+              -var="aws_region=${AWS_REGION}" \
+              -var="bootstrap_adopt_existing_state_bucket=${ADOPT}"; then
+              ok=true
+              break
+            fi
             echo "bootstrap apply failed attempt $attempt"; sleep 20
           done
           if [ "$ok" != true ]; then echo "::error::bootstrap terraform apply failed"; exit 1; fi
@@ -214,30 +235,22 @@ jobs:
           REGISTRY="${REPO_URL%%/*}"
           aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REGISTRY}"
 
-      - name: Build and push API + worker images (linux/amd64, digest-pinned)
+      - name: Build and push API + worker images (linux/amd64, ECR tags)
         working-directory: terraform
         env:
           TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
           REPO_URL="$(terraform output -raw ecr_repository_url)"
-          REPO_NAME="$(terraform output -raw ecr_repository_name)"
           TAG_API="${TAG}-api"
           TAG_WORKER="${TAG}-worker"
           docker build --platform linux/amd64 -f "${GITHUB_WORKSPACE}/apps/api/Dockerfile" -t "${REPO_URL}:${TAG_API}" "${GITHUB_WORKSPACE}"
           docker build --platform linux/amd64 -f "${GITHUB_WORKSPACE}/apps/api/Dockerfile.worker" -t "${REPO_URL}:${TAG_WORKER}" "${GITHUB_WORKSPACE}"
           docker push "${REPO_URL}:${TAG_API}"
           docker push "${REPO_URL}:${TAG_WORKER}"
-          DIGEST_API="$(aws ecr describe-images --repository-name "$REPO_NAME" --region "${AWS_REGION}" \
-            --image-ids "imageTag=${TAG_API}" --query 'imageDetails[0].imageDigest' --output text)"
-          DIGEST_WORKER="$(aws ecr describe-images --repository-name "$REPO_NAME" --region "${AWS_REGION}" \
-            --image-ids "imageTag=${TAG_WORKER}" --query 'imageDetails[0].imageDigest' --output text)"
-          if [ -z "$DIGEST_API" ] || [ "$DIGEST_API" = "None" ] || [ -z "$DIGEST_WORKER" ] || [ "$DIGEST_WORKER" = "None" ]; then
-            echo "::error::Could not resolve ECR image digests"
-            exit 1
-          fi
-          echo "IMAGE_URI_API=${REPO_URL}@${DIGEST_API}" >> "$GITHUB_ENV"
-          echo "IMAGE_URI_WORKER=${REPO_URL}@${DIGEST_WORKER}" >> "$GITHUB_ENV"
+          echo "LAMBDA_TAG_API=${TAG_API}" >> "$GITHUB_ENV"
+          echo "LAMBDA_TAG_WORKER=${TAG_WORKER}" >> "$GITHUB_ENV"
+          echo "ECR_REPO_URL=${REPO_URL}" >> "$GITHUB_ENV"
 
       - name: Terraform plan and apply (compute + CORS — private ECR only, no -target)
         working-directory: terraform
@@ -245,16 +258,36 @@ jobs:
           TF_VAR_enable_lambda_compute: "true"
         run: |
           set -euo pipefail
-          : "${IMAGE_URI_API:?missing IMAGE_URI_API}"
-          : "${IMAGE_URI_WORKER:?missing IMAGE_URI_WORKER}"
-          export TF_VAR_api_image_uri="$IMAGE_URI_API"
-          export TF_VAR_worker_image_uri="$IMAGE_URI_WORKER"
+          : "${LAMBDA_TAG_API:?missing LAMBDA_TAG_API}"
+          : "${LAMBDA_TAG_WORKER:?missing LAMBDA_TAG_WORKER}"
+          export TF_VAR_api_image_uri=""
+          export TF_VAR_worker_image_uri=""
+          export TF_VAR_lambda_api_image_tag="${LAMBDA_TAG_API}"
+          export TF_VAR_lambda_worker_image_tag="${LAMBDA_TAG_WORKER}"
           CF="$(terraform output -raw cloudfront_url)"
           export TF_VAR_api_base_url="$CF"
           export TF_VAR_frontend_url="$CF"
           export TF_VAR_cors_allow_origin_primary="$CF"
           terraform plan -out=plan_compute.tfplan -input=false -lock-timeout=300s
           bash "${GITHUB_WORKSPACE}/scripts/ci/terraform_apply_network_retry.sh" plan_compute.tfplan
+
+      - name: Lambda update-function-code (refresh container from ECR tag)
+        working-directory: terraform
+        run: |
+          set -euo pipefail
+          : "${ECR_REPO_URL:?}"
+          : "${LAMBDA_TAG_API:?}"
+          : "${LAMBDA_TAG_WORKER:?}"
+          API_URI="${ECR_REPO_URL}:${LAMBDA_TAG_API}"
+          WORKER_URI="${ECR_REPO_URL}:${LAMBDA_TAG_WORKER}"
+          API_FN="$(terraform output -raw lambda_api_function_name)"
+          WORKER_FN="$(terraform output -raw planner_worker_lambda_name)"
+          if [ -z "$API_FN" ] || [ -z "$WORKER_FN" ]; then
+            echo "::error::Missing Lambda function names from Terraform outputs"
+            exit 1
+          fi
+          aws lambda update-function-code --function-name "$API_FN" --image-uri "$API_URI" --region "${AWS_REGION}"
+          aws lambda update-function-code --function-name "$WORKER_FN" --image-uri "$WORKER_URI" --region "${AWS_REGION}"
 
       - name: Verify SQS → Lambda mapping
         working-directory: terraform

@@ -1,6 +1,6 @@
 output "state_bucket_id" {
   description = "S3 bucket id holding Terraform remote state for the main stack"
-  value       = aws_s3_bucket.tf_state.id
+  value       = local.state_bucket_id
 }
 
 output "aws_region" {
