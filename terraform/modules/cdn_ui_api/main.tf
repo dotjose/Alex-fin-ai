@@ -1,3 +1,11 @@
+data "aws_cloudfront_cache_policy" "caching_disabled" {
+  name = "Managed-CachingDisabled"
+}
+
+data "aws_cloudfront_origin_request_policy" "all_viewer_except_host_header" {
+  name = "Managed-AllViewerExceptHostHeader"
+}
+
 resource "aws_cloudfront_origin_access_control" "ui" {
   name                              = "${var.name_prefix}-ui-oac"
   description                       = "S3 UI bucket OAC"
@@ -54,16 +62,9 @@ resource "aws_cloudfront_distribution" "this" {
     target_origin_id       = "http-api"
     viewer_protocol_policy = "https-only"
     compress               = true
-    forwarded_values {
-      query_string = true
-      headers      = ["Authorization", "Content-Type"]
-      cookies {
-        forward = "none"
-      }
-    }
-    min_ttl     = 0
-    default_ttl = 0
-    max_ttl     = 0
+    # Managed policies: no edge caching; forward all viewer headers (except Host), all methods, all query strings.
+    cache_policy_id            = data.aws_cloudfront_cache_policy.caching_disabled.id
+    origin_request_policy_id   = data.aws_cloudfront_origin_request_policy.all_viewer_except_host_header.id
   }
 
   restrictions {

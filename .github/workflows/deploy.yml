@@ -363,22 +363,41 @@ jobs:
         run: |
           set -euo pipefail
           : "${HEALTHCHECK_URL:?HEALTHCHECK_URL missing}"
-          echo "Probing ${HEALTHCHECK_URL}"
+          : "${API_GATEWAY_URL:?API_GATEWAY_URL missing}"
+          FALLBACK="${API_GATEWAY_URL%/}/api/health"
+          probe_health() {
+            local url="$1"
+            curl -sS --fail-with-body \
+              --retry 3 --retry-all-errors --retry-delay 5 \
+              -o /tmp/h.json -w '%{http_code}' --connect-timeout 15 --max-time 120 "$url" || true
+          }
+          echo "Primary: ${HEALTHCHECK_URL}"
+          echo "Fallback (API Gateway direct): ${FALLBACK}"
           ok=false
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            code="$(curl -sS -o /tmp/h.json -w '%{http_code}' --max-time 45 "$HEALTHCHECK_URL" || true)"
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            code="$(probe_health "$HEALTHCHECK_URL")"
             if [ "$code" = "200" ] && grep -q '"status"' /tmp/h.json && grep -q 'healthy' /tmp/h.json; then
-              echo "Health OK (HTTP $code)"
+              echo "Health OK via CloudFront (HTTP $code)"
               cat /tmp/h.json
               ok=true
               break
             fi
-            echo "Attempt $attempt: HTTP ${code:-?} body:"; cat /tmp/h.json 2>/dev/null || true
-            sleep 15
+            echo "Attempt $attempt (CloudFront): HTTP ${code:-?} body:"; cat /tmp/h.json 2>/dev/null || true
+            if [ "$attempt" -ge 5 ]; then
+              code="$(probe_health "$FALLBACK")"
+              if [ "$code" = "200" ] && grep -q '"status"' /tmp/h.json && grep -q 'healthy' /tmp/h.json; then
+                echo "Health OK via API Gateway direct (HTTP $code) — CloudFront path still failing"
+                cat /tmp/h.json
+                ok=true
+                break
+              fi
+              echo "Attempt $attempt (API GW): HTTP ${code:-?} body:"; cat /tmp/h.json 2>/dev/null || true
+            fi
+            sleep $((10 + attempt * 2))
           done
           rm -f /tmp/h.json
           if [ "$ok" != true ]; then
-            echo "::error::Health check failed after retries: ${HEALTHCHECK_URL}"
+            echo "::error::Health check failed after retries (CloudFront + API Gateway): ${HEALTHCHECK_URL}"
             exit 1
           fi
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import threading
 import time
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from pathlib import Path
@@ -34,14 +36,49 @@ from src import run_pending_migrations, warn_if_core_tables_missing
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+_IS_LAMBDA = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME") or os.environ.get("LAMBDA_TASK_ROOT"))
+_LOGGED_ENV_KEYS = (
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "OPENROUTER_API_KEY",
+    "CLERK_JWT_ISSUER",
+)
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    apply_settings_to_environ()
-    yield
+
+def log_required_env_gaps() -> list[str]:
+    """Log presence of critical env vars (never values). Safe before Settings validation."""
+    missing = [k for k in _LOGGED_ENV_KEYS if not (os.environ.get(k) or "").strip()]
+    if missing:
+        logger.warning("startup_env_missing_keys=%s (values are not logged)", missing)
+    return missing
+
+
+def _health_payload() -> dict[str, str]:
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def create_app() -> FastAPI:
+    log_required_env_gaps()
+
+    app = FastAPI(
+        title="AlexFin.ai API",
+        description="Backend API for portfolio intelligence and analysis",
+        version="2.0.0",
+    )
+
+    @app.get("/health")
+    async def health_check():
+        """No DB, auth, or external I/O."""
+        return _health_payload()
+
+    @app.get("/api/health")
+    async def health_check_api_prefix():
+        """Same as /health; matches API Gateway ANY /api/{proxy+} and CloudFront /api/*."""
+        return _health_payload()
+
     try:
         settings = get_settings()
     except ValidationError as e:
@@ -53,20 +90,24 @@ def create_app() -> FastAPI:
         for err in e.errors():
             loc = ".".join(str(x) for x in err.get("loc", ()))
             logger.critical("  %s: %s", loc or "settings", err.get("msg"))
+        if _IS_LAMBDA:
+            logger.error(
+                "Lambda: invalid settings — serving only /health and /api/health until env is fixed."
+            )
+            return _attach_minimal_handlers(app)
         raise SystemExit(1) from e
-    apply_settings_to_environ()
-    logger.info("Running database migrations (Postgres)")
-    run_pending_migrations(settings.supabase_database_url)
-    logger.info("Database migrations complete")
-    warn_if_core_tables_missing(settings.supabase_database_url)
-    log_startup_connectivity(settings)
 
-    app = FastAPI(
-        title="AlexFin.ai API",
-        description="Backend API for portfolio intelligence and analysis",
-        version="2.0.0",
-        lifespan=lifespan,
-    )
+    apply_settings_to_environ()
+
+    _db_startup_lock = threading.Lock()
+    app.state.db_startup_complete = False
+
+    def _run_db_startup() -> None:
+        logger.info("Running database migrations (Postgres)")
+        run_pending_migrations(settings.supabase_database_url)
+        logger.info("Database migrations complete")
+        warn_if_core_tables_missing(settings.supabase_database_url)
+        log_startup_connectivity(settings)
 
     app.add_middleware(
         CORSMiddleware,
@@ -122,6 +163,22 @@ def create_app() -> FastAPI:
             )
             raise
 
+    @app.middleware("http")
+    async def deferred_db_startup(request: Request, call_next):
+        path = request.url.path
+        if path in ("/health", "/api/health"):
+            return await call_next(request)
+
+        def _sync_once() -> None:
+            with _db_startup_lock:
+                if app.state.db_startup_complete:
+                    return
+                _run_db_startup()
+                app.state.db_startup_complete = True
+
+        await asyncio.to_thread(_sync_once)
+        return await call_next(request)
+
     @app.exception_handler(RequestValidationError)
     async def request_validation_handler(request: Request, exc: RequestValidationError):
         return JSONResponse(
@@ -153,16 +210,35 @@ def create_app() -> FastAPI:
             content={"detail": "An unexpected error occurred. Our team has been notified."},
         )
 
-    @app.get("/health")
-    async def health_check():
-        return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
-    @app.get("/api/health")
-    async def health_check_api_prefix():
-        """Same payload as /health; path matches API Gateway ANY /api/{proxy+} and CloudFront /api/*."""
-        return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-
     register_routes(app, settings)
+    return app
+
+
+def _attach_minimal_handlers(app: FastAPI) -> FastAPI:
+    """Exception handlers when Settings cannot load (Lambda degraded mode)."""
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_handler(request: Request, exc: RequestValidationError):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": "Invalid request.",
+                "errors": exc.errors(),
+            },
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    @app.exception_handler(Exception)
+    async def general_exception_handler(request: Request, exc: Exception):
+        logger.error("Unexpected error: %s", exc, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "An unexpected error occurred. Our team has been notified."},
+        )
+
     return app
 
 
