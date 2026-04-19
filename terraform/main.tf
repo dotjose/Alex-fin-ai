@@ -29,15 +29,15 @@ locals {
     SUPABASE_SERVICE_ROLE_KEY     = var.supabase_service_role_key
     SUPABASE_DATABASE_URL         = var.supabase_database_url
     OPENROUTER_API_KEY            = var.openrouter_api_key
-    OR_MODEL_SIMPLE               = var.or_model_simple
-    OR_MODEL_FAST                 = var.or_model_fast
-    OR_MODEL_REASONING            = var.or_model_reasoning
+    OR_MODEL_SIMPLE               = trimspace(var.or_model_simple) != "" ? var.or_model_simple : "openai/gpt-4o-mini"
+    OR_MODEL_FAST                 = trimspace(var.or_model_fast) != "" ? var.or_model_fast : "openai/gpt-4o-mini"
+    OR_MODEL_REASONING            = trimspace(var.or_model_reasoning) != "" ? var.or_model_reasoning : "openai/gpt-4o"
     POLYGON_API_KEY               = var.polygon_api_key
     AWS_REGION                    = var.aws_region
     AWS_REGION_NAME               = var.aws_region
     DEFAULT_AWS_REGION            = var.aws_region
-    SQS_QUEUE_URL                 = module.worker.queue_url
-    S3_BUCKET_UI                  = module.frontend.bucket_id
+    SQS_QUEUE_URL                 = module.sqs.queue_url
+    S3_BUCKET_UI                  = module.s3_cloudfront.bucket_id
     TAGGER_FUNCTION               = var.tagger_function
     REPORTER_FUNCTION             = var.reporter_function
     CHARTER_FUNCTION              = var.charter_function
@@ -74,30 +74,25 @@ module "api" {
   cors_allow_origin_primary = var.cors_allow_origin_primary
 }
 
-module "worker" {
-  source                     = "./modules/worker"
+module "sqs" {
+  source                     = "./modules/sqs"
   name_prefix                = local.name
   visibility_timeout_seconds = 910
   max_receive_count          = 3
 }
 
-module "frontend" {
-  source                 = "./modules/frontend"
+module "s3_cloudfront" {
+  source                 = "./modules/s3-cloudfront"
   name_prefix            = local.name
   comment                = "${local.name} UI + API (private S3 + OAC)"
   ui_bucket_name         = "${local.name}-ui-${data.aws_caller_identity.current.account_id}"
   http_api_origin_domain = replace(module.api.api_endpoint, "https://", "")
 }
 
-module "ecr" {
-  source      = "./modules/ecr_api"
-  name_prefix = local.name
-}
-
 module "iam" {
   source                   = "./modules/iam_agent_runtime"
   name_prefix              = local.name
-  queue_arn                = module.worker.queue_arn
+  queue_arn                = module.sqs.queue_arn
   child_lambda_invoke_arns = local.child_invoke_arn_list
 }
 
@@ -114,7 +109,7 @@ data "aws_iam_policy_document" "sqs_queue_access" {
       "sqs:GetQueueAttributes",
       "sqs:GetQueueUrl",
     ]
-    resources = [module.worker.queue_arn]
+    resources = [module.sqs.queue_arn]
   }
 
   statement {
@@ -131,37 +126,31 @@ data "aws_iam_policy_document" "sqs_queue_access" {
       "sqs:ChangeMessageVisibility",
       "sqs:GetQueueUrl",
     ]
-    resources = [module.worker.queue_arn]
+    resources = [module.sqs.queue_arn]
   }
 }
 
 resource "aws_sqs_queue_policy" "main" {
-  queue_url = module.worker.queue_id
+  queue_url = module.sqs.queue_id
   policy    = data.aws_iam_policy_document.sqs_queue_access.json
 }
 
-module "compute" {
-  source                 = "./modules/compute_lambdas"
+module "lambda" {
+  source                 = "./modules/lambda"
+  name_prefix            = local.name
   api_function_name      = "${local.name}-api"
   worker_function_name   = "${local.name}-planner-worker"
   api_role_arn           = module.iam.api_role_arn
   worker_role_arn        = module.iam.worker_role_arn
   api_image_uri          = var.api_image_uri
   worker_image_uri       = var.worker_image_uri
-  queue_arn              = module.worker.queue_arn
+  queue_arn              = module.sqs.queue_arn
   environment            = local.lambda_env
   api_timeout_seconds    = 30
   api_memory_mb          = 1024
   worker_timeout_seconds = 900
   worker_memory_mb       = 2048
+  api_id                 = module.api.id
+  api_execution_arn      = module.api.execution_arn
   depends_on             = [aws_sqs_queue_policy.main, module.iam]
-}
-
-module "http_api" {
-  source               = "./modules/http_api_lambda"
-  api_id               = module.api.id
-  api_execution_arn    = module.api.execution_arn
-  lambda_invoke_arn    = module.compute.api_invoke_arn
-  lambda_function_name = module.compute.api_function_name
-  depends_on           = [module.compute, module.api]
 }

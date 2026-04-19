@@ -1,10 +1,10 @@
-# Production deploy: static IAM user keys → bootstrap remote state (S3 + DynamoDB) → main Terraform
+# Production deploy: IAM user keys → bootstrap remote state (S3 + DynamoDB) → main Terraform
 # (phased) → ECR image → Lambda image + CORS → Next export → S3 → CloudFront invalidation.
 #
-# Auth: aws-actions/configure-aws-credentials with AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY only.
-# No OIDC, no AWS_ROLE_ARN, no role-to-assume, no id-token permissions.
+# Auth: aws-actions/configure-aws-credentials (static keys only). aws-region from vars.AWS_REGION.
+# No OIDC, no AWS_ROLE_ARN, no role-to-assume.
 #
-# State: terraform/bootstrap creates the S3 backend bucket + lock table (no TF_STATE_BUCKET GitHub input).
+# State: terraform/bootstrap creates S3 backend + lock table (no TF_STATE_BUCKET).
 
 name: Deploy
 
@@ -54,13 +54,16 @@ jobs:
     permissions:
       contents: read
     env:
-      TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_supabase_url: ${{ vars.SUPABASE_URL }}
       TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       TF_VAR_supabase_database_url: ${{ secrets.SUPABASE_DATABASE_URL }}
       TF_VAR_openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
       TF_VAR_clerk_secret_key: ${{ secrets.CLERK_SECRET_KEY }}
       TF_VAR_clerk_jwt_issuer: ${{ vars.CLERK_JWT_ISSUER }}
+      TF_VAR_or_model_simple: ${{ vars.OR_MODEL_SIMPLE }}
+      TF_VAR_or_model_fast: ${{ vars.OR_MODEL_FAST }}
+      TF_VAR_or_model_reasoning: ${{ vars.OR_MODEL_REASONING }}
     outputs:
       state_bucket: ${{ steps.bootstrap.outputs.state_bucket }}
       lock_table: ${{ steps.bootstrap.outputs.lock_table }}
@@ -79,16 +82,21 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Preflight
         env:
+          AWS_REGION_EXPECT: ${{ vars.AWS_REGION }}
           SUPABASE_URL_VAR: ${{ vars.SUPABASE_URL }}
           CLERK_ISSUER_VAR: ${{ vars.CLERK_JWT_ISSUER }}
         run: |
           set -euo pipefail
           if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
-            echo "::error::Configure environment secrets AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+            echo "::error::Configure secrets AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (e.g. on the production environment)"
+            exit 1
+          fi
+          if [ -z "${AWS_REGION_EXPECT:-}" ]; then
+            echo "::error::Set repository variable AWS_REGION (e.g. us-east-1)"
             exit 1
           fi
           if [ -z "${SUPABASE_URL_VAR:-}" ]; then
@@ -105,10 +113,6 @@ jobs:
           fi
           if [ -z "${TF_VAR_clerk_secret_key:-}" ]; then
             echo "::error::Set secret CLERK_SECRET_KEY"
-            exit 1
-          fi
-          if [ -z "${AWS_REGION:-}" ]; then
-            echo "::error::Configure environment secret AWS_REGION (must match the region used by Terraform, e.g. us-east-1)"
             exit 1
           fi
           aws sts get-caller-identity --no-cli-pager
@@ -217,18 +221,23 @@ jobs:
           done
           exit 1
 
-      - name: Export Terraform outputs for downstream jobs
+      - name: Terraform output (JSON) + job outputs
         id: tf_outputs
         working-directory: terraform
         run: |
           set -euo pipefail
-          echo "cloudfront_url=$(terraform output -raw cloudfront_url)" >> "$GITHUB_OUTPUT"
-          echo "api_base_url=$(terraform output -raw api_base_url)" >> "$GITHUB_OUTPUT"
-          echo "sqs_queue_url=$(terraform output -raw sqs_queue_url)" >> "$GITHUB_OUTPUT"
-          echo "s3_bucket_name=$(terraform output -raw s3_bucket_name)" >> "$GITHUB_OUTPUT"
-          echo "distribution_id=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_OUTPUT"
-          echo "ecr_repository_url=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
-          echo "ecr_repository_name=$(terraform output -raw ecr_repository_name)" >> "$GITHUB_OUTPUT"
+          terraform output -json > "$GITHUB_WORKSPACE/infra.json"
+          INFRA="$GITHUB_WORKSPACE/infra.json"
+          jq -e '.cloudfront_url.value' "$INFRA" >/dev/null
+          jq -e '.api_base_url.value' "$INFRA" >/dev/null
+          jq -e '.sqs_queue_url.value' "$INFRA" >/dev/null
+          echo "cloudfront_url=$(jq -r '.cloudfront_url.value' "$INFRA")" >> "$GITHUB_OUTPUT"
+          echo "api_base_url=$(jq -r '.api_base_url.value' "$INFRA")" >> "$GITHUB_OUTPUT"
+          echo "sqs_queue_url=$(jq -r '.sqs_queue_url.value' "$INFRA")" >> "$GITHUB_OUTPUT"
+          echo "s3_bucket_name=$(jq -r '.s3_bucket_name.value' "$INFRA")" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$(jq -r '.cloudfront_distribution_id.value' "$INFRA")" >> "$GITHUB_OUTPUT"
+          echo "ecr_repository_url=$(jq -r '.ecr_repository_url.value' "$INFRA")" >> "$GITHUB_OUTPUT"
+          echo "ecr_repository_name=$(jq -r '.ecr_repository_name.value' "$INFRA")" >> "$GITHUB_OUTPUT"
 
   lambda_deploy:
     name: Lambda (ECR + Terraform phases 1b + 2)
@@ -239,13 +248,16 @@ jobs:
     permissions:
       contents: read
     env:
-      TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
       TF_VAR_supabase_url: ${{ vars.SUPABASE_URL }}
       TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       TF_VAR_supabase_database_url: ${{ secrets.SUPABASE_DATABASE_URL }}
       TF_VAR_openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
       TF_VAR_clerk_secret_key: ${{ secrets.CLERK_SECRET_KEY }}
       TF_VAR_clerk_jwt_issuer: ${{ vars.CLERK_JWT_ISSUER }}
+      TF_VAR_or_model_simple: ${{ vars.OR_MODEL_SIMPLE }}
+      TF_VAR_or_model_fast: ${{ vars.OR_MODEL_FAST }}
+      TF_VAR_or_model_reasoning: ${{ vars.OR_MODEL_REASONING }}
     outputs:
       cloudfront_url: ${{ steps.final_outputs.outputs.cloudfront_url }}
       api_base_url: ${{ steps.final_outputs.outputs.api_base_url }}
@@ -260,7 +272,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -272,7 +284,7 @@ jobs:
           cat > "${GITHUB_WORKSPACE}/terraform/cideploy.backend.hcl" <<EOF
           bucket         = "${{ needs.terraform.outputs.state_bucket }}"
           key            = "alex-financial-adviser/main/terraform.tfstate"
-          region         = "${{ secrets.AWS_REGION }}"
+          region         = "${{ vars.AWS_REGION }}"
           dynamodb_table = "${{ needs.terraform.outputs.lock_table }}"
           encrypt        = true
           EOF
@@ -381,16 +393,32 @@ jobs:
           done
           exit 1
 
-      - name: Export final Terraform outputs
+      - name: Terraform output (JSON) + export deploy env + job outputs
         id: final_outputs
         working-directory: terraform
         run: |
           set -euo pipefail
-          echo "cloudfront_url=$(terraform output -raw cloudfront_url)" >> "$GITHUB_OUTPUT"
-          echo "api_base_url=$(terraform output -raw api_base_url)" >> "$GITHUB_OUTPUT"
-          echo "sqs_queue_url=$(terraform output -raw sqs_queue_url)" >> "$GITHUB_OUTPUT"
-          echo "s3_bucket_name=$(terraform output -raw s3_bucket_name)" >> "$GITHUB_OUTPUT"
-          echo "distribution_id=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_OUTPUT"
+          terraform output -json > "$GITHUB_WORKSPACE/infra.json"
+          INFRA="$GITHUB_WORKSPACE/infra.json"
+          jq -e '.cloudfront_url.value' "$INFRA" >/dev/null
+          CF="$(jq -r '.cloudfront_url.value' "$INFRA")"
+          API="$(jq -r '.api_base_url.value' "$INFRA")"
+          SQS="$(jq -r '.sqs_queue_url.value' "$INFRA")"
+          S3="$(jq -r '.s3_bucket_name.value' "$INFRA")"
+          DIST="$(jq -r '.cloudfront_distribution_id.value' "$INFRA")"
+          {
+            echo "NEXT_PUBLIC_API_URL=${CF}"
+            echo "FRONTEND_URL=${CF}"
+            echo "API_BASE_URL=${API}"
+            echo "SQS_QUEUE_URL=${SQS}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "cloudfront_url=${CF}"
+            echo "api_base_url=${API}"
+            echo "sqs_queue_url=${SQS}"
+            echo "s3_bucket_name=${S3}"
+            echo "distribution_id=${DIST}"
+          } >> "$GITHUB_OUTPUT"
 
   build_frontend:
     name: Build frontend
@@ -400,6 +428,11 @@ jobs:
     environment: production
     permissions:
       contents: read
+    env:
+      NEXT_PUBLIC_API_URL: ${{ needs.lambda_deploy.outputs.cloudfront_url }}
+      FRONTEND_URL: ${{ needs.lambda_deploy.outputs.cloudfront_url }}
+      API_BASE_URL: ${{ needs.lambda_deploy.outputs.api_base_url }}
+      SQS_QUEUE_URL: ${{ needs.lambda_deploy.outputs.sqs_queue_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -408,7 +441,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - uses: actions/setup-node@v4
         with:
@@ -426,10 +459,9 @@ jobs:
             echo "::error::Set secret NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"
             exit 1
           fi
-          CF_URL="${{ needs.lambda_deploy.outputs.cloudfront_url }}"
           {
-            echo "NEXT_PUBLIC_API_URL=${CF_URL}"
-            echo "NEXT_PUBLIC_APP_URL=${CF_URL}"
+            echo "NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}"
+            echo "NEXT_PUBLIC_APP_URL=${FRONTEND_URL}"
             echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}"
           } > .env.production
           npm ci
@@ -454,7 +486,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
 
       - name: Create CloudFront invalidation
         env:

@@ -1,3 +1,6 @@
+# GitHub Actions maps repository/Environment configuration to TF_VAR_* (see .github/workflows/deploy.yml).
+# Required for Lambda: supabase_*, openrouter_api_key, clerk_jwt_issuer; optional OR_MODEL_* (empty uses defaults in main.tf locals).
+
 variable "aws_region" {
   type        = string
   description = "AWS region"
