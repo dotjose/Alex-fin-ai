@@ -4,20 +4,18 @@
 
 There is **no** pre-created S3 bucket for Terraform state.
 
-1. **`terraform/bootstrap/`** — applies `modules/state_bootstrap` using **local** `terraform.tfstate` in that directory. It creates:
-   - S3 bucket: `alex-terraform-state-<account_id>-<region_slug>` (region slug = AWS region with `-` removed, e.g. `useast1`)
-   - DynamoDB table: `alex-terraform-locks-<account_id>-<region_slug>`
+1. **`terraform/bootstrap/`** — applies `modules/state_bootstrap` using **local** `terraform.tfstate` in that directory. It creates the S3 bucket: `alex-terraform-state-<account_id>-<region_slug>` (region slug = AWS region with `-` removed, e.g. `useast1`). Main-stack state locking uses **S3 native lockfiles** (`use_lockfile`, Terraform **≥ 1.10**), not DynamoDB.
 2. **GitHub Actions** copies that local state object to `s3://<state-bucket>/_meta/bootstrap/terraform.tfstate` after each bootstrap apply so the next run can **restore** it (bootstrap stays idempotent).
-3. **`terraform/` (main stack)** uses `backend "s3"` with partial config written at apply time as `cideploy.backend.hcl` (gitignored), pointing at the bucket and lock table from bootstrap outputs.
+3. **`terraform/` (main stack)** uses `backend "s3"` with partial config written at apply time as `cideploy.backend.hcl` (gitignored): `bucket`, `key`, `region`, `use_lockfile = true`, `encrypt`.
 
-Local development against real AWS: copy `backend.example.hcl` to `backend.local.hcl`, set `bucket` / `dynamodb_table` from bootstrap outputs (or reuse the same bucket after one CI run), then `terraform init -backend-config=backend.local.hcl -reconfigure`.
+Local development against real AWS: copy `backend.example.hcl` to `backend.local.hcl`, set `bucket` from bootstrap outputs (or reuse the same bucket after one CI run), then `terraform init -backend-config=backend.local.hcl -reconfigure`.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `bootstrap/` | One-shot stack: state bucket + lock table only |
-| `modules/state_bootstrap/` | S3 + DynamoDB for Terraform remote state |
+| `bootstrap/` | One-shot stack: remote state S3 bucket only |
+| `modules/state_bootstrap/` | S3 bucket for Terraform remote state |
 | `modules/network/` | Availability zones (substrate for future VPC work) |
 | `modules/api/` | HTTP API (API Gateway v2) + CORS |
 | `modules/worker/` | SQS main queue + DLQ (wraps `sqs_agent_queue`) |

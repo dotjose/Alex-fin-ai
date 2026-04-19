@@ -69,7 +69,6 @@ jobs:
       TF_VAR_polygon_api_key: ${{ secrets.TF_VAR_POLYGON_API_KEY }}
     outputs:
       state_bucket: ${{ steps.bootstrap.outputs.state_bucket }}
-      lock_table: ${{ steps.bootstrap.outputs.lock_table }}
       cloudfront_url: ${{ steps.tf_outputs.outputs.cloudfront_url }}
       api_base_url: ${{ steps.tf_outputs.outputs.api_base_url }}
       sqs_queue_url: ${{ steps.tf_outputs.outputs.sqs_queue_url }}
@@ -140,8 +139,9 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
+          terraform_version: "1.10.6"
 
-      - name: Terraform bootstrap (S3 remote state + DynamoDB lock)
+      - name: Terraform bootstrap (S3 remote state + native state locking)
         id: bootstrap
         run: |
           set -euo pipefail
@@ -170,18 +170,16 @@ jobs:
           if [ "$ok" != true ]; then echo "::error::bootstrap terraform apply failed"; exit 1; fi
           aws s3 cp ./terraform.tfstate "s3://${STATE_BUCKET}/${META_KEY}"
           echo "state_bucket=$(terraform output -raw state_bucket)" >> "$GITHUB_OUTPUT"
-          echo "lock_table=$(terraform output -raw lock_table)" >> "$GITHUB_OUTPUT"
 
       - name: Write main stack S3 backend config
         run: |
           set -euo pipefail
           BUCKET="$(terraform -chdir="${GITHUB_WORKSPACE}/terraform/bootstrap" output -raw state_bucket)"
-          TABLE="$(terraform -chdir="${GITHUB_WORKSPACE}/terraform/bootstrap" output -raw lock_table)"
           cat > "${GITHUB_WORKSPACE}/terraform/cideploy.backend.hcl" <<EOF
           bucket         = "${BUCKET}"
           key            = "alex-financial-adviser/main/terraform.tfstate"
           region         = "${AWS_REGION}"
-          dynamodb_table = "${TABLE}"
+          use_lockfile   = true
           encrypt        = true
           EOF
 
@@ -198,15 +196,7 @@ jobs:
         working-directory: terraform
         run: terraform validate
 
-      - name: Terraform plan (phase 1 — placeholder Lambda images + permissive CORS)
-        working-directory: terraform
-        env:
-          TF_VAR_api_base_url: ""
-          TF_VAR_frontend_url: ""
-          TF_VAR_cors_allow_origin_primary: ""
-        run: terraform plan -out=tfplan1 -input=false
-
-      - name: Terraform apply (phase 1, with retries)
+      - name: Terraform plan and apply (phase 1 — placeholder Lambda images + permissive CORS)
         working-directory: terraform
         env:
           TF_VAR_api_base_url: ""
@@ -215,10 +205,11 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
+            terraform plan -out=tfplan1 -input=false
             if terraform apply -auto-approve -input=false tfplan1; then
               exit 0
             fi
-            echo "Terraform apply phase 1 failed (attempt ${attempt}); backing off 30s..."
+            echo "Terraform phase 1 failed (attempt ${attempt}); re-planning after 30s..."
             sleep 30
           done
           exit 1
@@ -285,6 +276,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
+          terraform_version: "1.10.6"
 
       - name: Restore S3 backend config
         run: |
@@ -293,7 +285,7 @@ jobs:
           bucket         = "${{ needs.terraform.outputs.state_bucket }}"
           key            = "alex-financial-adviser/main/terraform.tfstate"
           region         = "${{ vars.AWS_REGION }}"
-          dynamodb_table = "${{ needs.terraform.outputs.lock_table }}"
+          use_lockfile   = true
           encrypt        = true
           EOF
 
@@ -332,17 +324,7 @@ jobs:
           fi
           echo "IMAGE_URI=${REPO_URL}@${DIGEST}" >> "$GITHUB_ENV"
 
-      - name: Terraform plan (phase 1b — Lambda images from ECR digest)
-        working-directory: terraform
-        env:
-          TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_api_base_url: ""
-          TF_VAR_frontend_url: ""
-          TF_VAR_cors_allow_origin_primary: ""
-        run: terraform plan -out=tfplan1b -input=false
-
-      - name: Terraform apply (phase 1b, with retries)
+      - name: Terraform plan and apply (phase 1b — Lambda images from ECR digest)
         working-directory: terraform
         env:
           TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
@@ -353,10 +335,11 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
+            terraform plan -out=tfplan1b -input=false
             if terraform apply -auto-approve -input=false tfplan1b; then
               exit 0
             fi
-            echo "Terraform apply phase 1b failed (attempt ${attempt}); backing off 30s..."
+            echo "Terraform phase 1b failed (attempt ${attempt}); re-planning after 30s..."
             sleep 30
           done
           exit 1
@@ -372,17 +355,7 @@ jobs:
             exit 1
           fi
 
-      - name: Terraform plan (phase 2 — CORS + Lambda public URLs)
-        working-directory: terraform
-        env:
-          TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_api_base_url: ${{ needs.terraform.outputs.cloudfront_url }}
-          TF_VAR_frontend_url: ${{ needs.terraform.outputs.cloudfront_url }}
-          TF_VAR_cors_allow_origin_primary: ${{ needs.terraform.outputs.cloudfront_url }}
-        run: terraform plan -out=tfplan2 -input=false
-
-      - name: Terraform apply (phase 2, with retries)
+      - name: Terraform plan and apply (phase 2 — CORS + Lambda public URLs)
         working-directory: terraform
         env:
           TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
@@ -393,10 +366,11 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
+            terraform plan -out=tfplan2 -input=false
             if terraform apply -auto-approve -input=false tfplan2; then
               exit 0
             fi
-            echo "Terraform apply phase 2 failed (attempt ${attempt}); backing off 30s..."
+            echo "Terraform phase 2 failed (attempt ${attempt}); re-planning after 30s..."
             sleep 30
           done
           exit 1

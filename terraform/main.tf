@@ -33,9 +33,6 @@ locals {
     OR_MODEL_FAST                 = trimspace(var.or_model_fast) != "" ? var.or_model_fast : "openai/gpt-4o-mini"
     OR_MODEL_REASONING            = trimspace(var.or_model_reasoning) != "" ? var.or_model_reasoning : "openai/gpt-4o"
     POLYGON_API_KEY               = var.polygon_api_key
-    AWS_REGION                    = var.aws_region
-    AWS_REGION_NAME               = var.aws_region
-    DEFAULT_AWS_REGION            = var.aws_region
     SQS_QUEUE_URL                 = module.sqs.queue_url
     S3_BUCKET_UI                  = module.s3_cloudfront.bucket_id
     TAGGER_FUNCTION               = var.tagger_function
