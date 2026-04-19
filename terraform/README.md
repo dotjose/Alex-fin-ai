@@ -13,9 +13,25 @@ Layout:
 | `modules/http_api_lambda` | API Gateway → Lambda integration (API resource lives in root to break graph cycles) |
 | `modules/cdn_ui_api` | CloudFront + S3 OAC + bucket policy (CloudFront-only `s3:GetObject`) |
 
+## GitHub repository variables (required for CI)
+
+These are **not** Terraform variables; the workflow writes `terraform/cideploy.backend.hcl` from them and fails preflight if they are missing.
+
+| Variable | Purpose |
+|----------|---------|
+| `AWS_REGION` | AWS region for providers, ECR, S3 sync, and remote state bucket |
+| `TF_STATE_BUCKET` | S3 bucket holding the Terraform state object |
+| `TF_STATE_LOCK_TABLE` | DynamoDB table used for state locking |
+| `TF_STATE_KEY` | Optional. State object key inside the bucket (default: `alex-financial-adviser/terraform.tfstate`) |
+| `AWS_AUTH_MODE` | Optional. `oidc` (default) or `keys`. Selects **one** AWS credential mechanism for the deploy job |
+| `NEXT_PUBLIC_API_ORIGIN` | Optional. `cloudfront` (default) or `apigateway`. Chooses which Terraform output feeds `NEXT_PUBLIC_API_URL` at build time |
+| `OR_MODEL_SIMPLE`, `OR_MODEL_FAST`, `OR_MODEL_REASONING` | OpenRouter model ids for Lambda |
+| `OR_MODEL_EMBEDDING` | Optional embedding model id |
+| `LANGFUSE_HOST` | Optional Langfuse host when tracing secrets are set |
+
 ## Outputs → CI (`infra.json`)
 
-Stable keys: `cloudfront_url`, `api_base_url`, `sqs_queue_url`, `s3_bucket`, `api_gateway_endpoint`, `api_gateway_url`, `lambda_function_arns` (map: `api`, `planner_worker`, plus **expected** child function ARNs for tagger/reporter/charter/retirement — those functions must exist and use a compatible image, or invokes fail).
+Stable keys: `cloudfront_url`, `api_base_url`, `sqs_queue_url`, `s3_bucket`, `s3_bucket_ui`, `api_gateway_endpoint`, `api_gateway_url`, `lambda_function_arns` (map: `api`, `planner_worker`, plus **expected** child function ARNs for tagger/reporter/charter/retirement — those functions must exist and use a compatible image, or invokes fail).
 
 ## State migration
 
