@@ -11,10 +11,12 @@ from typing import Any, Dict
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 
 from core.auth import current_user_id_factory
 from core.config import Settings
+from core.route_errors import log_and_raise_http
 from services.aws import credential_source_hint, get_sqs_client, log_sqs_url_vs_credentials
 from services.supabase_client import get_database
 
@@ -292,8 +294,7 @@ def build_router(settings: Settings) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error triggering analysis: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="POST /api/analyze")
 
     @router.get("/jobs/{job_id}")
     async def get_job_status(job_id: str, clerk_user_id: str = Depends(get_uid)):
@@ -313,21 +314,19 @@ def build_router(settings: Settings) -> APIRouter:
                 trace_id=orch.get("trace_id"),
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
-            return job
+            return jsonable_encoder(job)
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error getting job status: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="GET /api/jobs/{job_id}")
 
     @router.get("/jobs")
     async def list_jobs(clerk_user_id: str = Depends(get_uid)):
         try:
             user_jobs = db.jobs.find_by_user(clerk_user_id, limit=100)
             user_jobs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-            return {"jobs": user_jobs}
+            return jsonable_encoder({"jobs": user_jobs})
         except Exception as e:
-            logger.error("Error listing jobs: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="GET /api/jobs")
 
     return router

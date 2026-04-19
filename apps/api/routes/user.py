@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from core.auth import HTTPAuthorizationCredentials, clerk_bearer, current_user_id_factory
 from core.config import Settings
+from core.route_errors import log_and_raise_http
 from services.supabase_client import get_database
 
 logger = logging.getLogger(__name__)
@@ -67,11 +68,7 @@ def build_router(settings: Settings) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.exception("api_user_identity_failed: %s", e)
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to resolve user identity.",
-            ) from e
+            log_and_raise_http(logger, e, context="GET /api/user")
 
     @router.put("/user", response_model=UserResponse)
     async def update_user(
@@ -91,10 +88,6 @@ def build_router(settings: Settings) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error updating user: %s", e, exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail="Profile update failed.",
-            ) from e
+            log_and_raise_http(logger, e, context="PUT /api/user")
 
     return router

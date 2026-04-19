@@ -7,10 +7,12 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
 from core.auth import current_user_id_factory
 from core.config import Settings
+from core.route_errors import log_and_raise_http
 from services.supabase_client import get_database
 from src.schemas import InstrumentCreate, PositionCreate
 
@@ -38,12 +40,11 @@ def build_router(settings: Settings) -> APIRouter:
             for pos in db.positions.find_by_account(account_id):
                 inst = db.instruments.find_by_symbol(pos["symbol"])
                 formatted.append({**pos, "instrument": inst})
-            return {"positions": formatted}
+            return jsonable_encoder({"positions": formatted})
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error listing positions: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="GET /api/accounts/{account_id}/positions")
 
     @router.post("/positions")
     async def create_position(
@@ -79,12 +80,12 @@ def build_router(settings: Settings) -> APIRouter:
                 symbol=symbol_upper,
                 quantity=position.quantity,
             )
-            return db.positions.find_by_id(position_id)
+            row = db.positions.find_by_id(position_id)
+            return jsonable_encoder(row)
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error creating position: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="POST /api/positions")
 
     @router.put("/positions/{position_id}")
     async def update_position(
@@ -101,12 +102,12 @@ def build_router(settings: Settings) -> APIRouter:
                 raise HTTPException(status_code=403, detail="Not authorized")
             update_data = position_update.model_dump(exclude_unset=True)
             db.positions.update(position_id, update_data)
-            return db.positions.find_by_id(position_id)
+            row = db.positions.find_by_id(position_id)
+            return jsonable_encoder(row)
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error updating position: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="PUT /api/positions/{position_id}")
 
     @router.delete("/positions/{position_id}")
     async def delete_position(position_id: str, clerk_user_id: str = Depends(get_uid)):
@@ -122,15 +123,14 @@ def build_router(settings: Settings) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error deleting position: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="DELETE /api/positions/{position_id}")
 
     @router.get("/instruments")
     async def list_instruments(clerk_user_id: str = Depends(get_uid)):
         _ = clerk_user_id
         try:
             instruments = db.instruments.find_all()
-            return [
+            out = [
                 {
                     "symbol": inst["symbol"],
                     "name": inst["name"],
@@ -139,8 +139,8 @@ def build_router(settings: Settings) -> APIRouter:
                 }
                 for inst in instruments
             ]
+            return jsonable_encoder(out)
         except Exception as e:
-            logger.error("Error fetching instruments: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="GET /api/instruments")
 
     return router

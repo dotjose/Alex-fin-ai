@@ -7,10 +7,12 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
 from core.auth import current_user_id_factory
 from core.config import Settings
+from core.route_errors import log_and_raise_http
 from services.supabase_client import get_database
 from src.schemas import AccountCreate
 
@@ -31,10 +33,10 @@ def build_router(settings: Settings) -> APIRouter:
     @router.get("/accounts")
     async def list_accounts(clerk_user_id: str = Depends(get_uid)):
         try:
-            return db.accounts.find_by_user(clerk_user_id)
+            rows = db.accounts.find_by_user(clerk_user_id)
+            return jsonable_encoder(rows)
         except Exception as e:
-            logger.error("Error listing accounts: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="GET /api/accounts")
 
     @router.post("/accounts")
     async def create_account(
@@ -51,12 +53,14 @@ def build_router(settings: Settings) -> APIRouter:
                 account_purpose=account.account_purpose,
                 cash_balance=getattr(account, "cash_balance", Decimal("0")),
             )
-            return db.accounts.find_by_id(account_id)
+            row = db.accounts.find_by_id(account_id)
+            if not row:
+                raise HTTPException(status_code=500, detail="Account was created but could not be loaded.")
+            return jsonable_encoder(row)
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error creating account: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="POST /api/accounts")
 
     @router.put("/accounts/{account_id}")
     async def update_account(
@@ -72,12 +76,14 @@ def build_router(settings: Settings) -> APIRouter:
                 raise HTTPException(status_code=403, detail="Not authorized")
             update_data = account_update.model_dump(exclude_unset=True)
             db.accounts.update(account_id, update_data)
-            return db.accounts.find_by_id(account_id)
+            row = db.accounts.find_by_id(account_id)
+            if not row:
+                raise HTTPException(status_code=404, detail="Account not found")
+            return jsonable_encoder(row)
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error updating account: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="PUT /api/accounts/{account_id}")
 
     @router.delete("/accounts/{account_id}")
     async def delete_account(account_id: str, clerk_user_id: str = Depends(get_uid)):
@@ -94,7 +100,6 @@ def build_router(settings: Settings) -> APIRouter:
         except HTTPException:
             raise
         except Exception as e:
-            logger.error("Error deleting account: %s", e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            log_and_raise_http(logger, e, context="DELETE /api/accounts/{account_id}")
 
     return router
