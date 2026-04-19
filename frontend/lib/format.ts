@@ -7,7 +7,7 @@ export function toNumber(value: unknown): number {
 }
 
 export function formatUsd(value: number): string {
-  if (!Number.isFinite(value)) return "—";
+  if (!Number.isFinite(value)) return "No data";
   if (value === 0) return "$0";
   const opts: Intl.NumberFormatOptions =
     value % 1 === 0
@@ -21,6 +21,7 @@ export function formatUsd(value: number): string {
 }
 
 export function formatUsdDetailed(value: number): string {
+  if (!Number.isFinite(value)) return "No data";
   return new Intl.NumberFormat(undefined, {
     style: "currency",
     currency: "USD",

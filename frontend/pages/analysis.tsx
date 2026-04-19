@@ -1,18 +1,29 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/router';
-import { useAuth } from '@clerk/nextjs';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
+import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/router";
+import { useAuth } from "@clerk/nextjs";
 import {
-  PieChart, Pie, Cell, BarChart, Bar, LineChart, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
-} from 'recharts';
-import Layout from '../components/Layout';
-import { getApiUrl } from '../lib/config';
-import Head from 'next/head';
-import { pageTitle } from '@/lib/brand';
-import type { ApiJob } from '@/lib/useDashboardData';
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import Layout from "../components/Layout";
+import { getApiUrl } from "../lib/config";
+import Head from "next/head";
+import { pageTitle } from "@/lib/brand";
+import type { ApiJob } from "@/lib/useDashboardData";
+import { DsCard, DsChartContainer } from "@/components/ds";
+import { AppPageHero } from "@/components/shell/AppPageHero";
+import { StructuredJobOverview } from "@/components/analysis/StructuredJobOverview";
+import { MarkdownBriefPanel } from "@/components/analysis/MarkdownBriefPanel";
 import {
   PIPELINE_LABELS,
   PIPELINE_ORDER,
@@ -27,14 +38,15 @@ interface Job {
   created_at: string;
   status: string;
   job_type: string;
-  request_payload?: ApiJob['request_payload'];
+  request_payload?: ApiJob["request_payload"];
+  summary_payload?: ApiJob["summary_payload"];
   report_payload?: {
     agent: string;
     content: string;
     generated_at: string;
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  charts_payload?: Record<string, any> | null;  // Charter stores charts with dynamic keys
+  charts_payload?: Record<string, any> | null; // Charter stores charts with dynamic keys
   retirement_payload?: {
     agent: string;
     analysis: string;
@@ -176,9 +188,9 @@ export default function Analysis() {
   if (loading) {
     return (
       <Layout>
-        <div className="min-h-screen bg-[var(--bg)] py-8">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-8 py-12 text-center shadow-[var(--shadow-card)]">
+        <div className="ds-page min-h-screen min-w-0 bg-[var(--bg)] py-[var(--space-8)]">
+          <div className="min-w-0">
+            <div className="rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--card)] px-[var(--space-8)] py-[var(--space-12)] text-center shadow-[var(--shadow-card)]">
               <div className="animate-pulse">
                 <div className="mx-auto mb-4 h-8 w-1/3 rounded bg-[var(--border)]" />
                 <div className="mx-auto h-4 w-1/2 rounded bg-[var(--border)]" />
@@ -193,13 +205,13 @@ export default function Analysis() {
   if (!job) {
     return (
       <Layout>
-        <div className="min-h-screen bg-[var(--bg)] py-8">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-8 py-12 text-center shadow-[var(--shadow-card)]">
-              <h2 className="mb-4 text-2xl font-bold text-[var(--text-primary)]">
-                {fetchingLatest ? "Loading Latest Analysis..." : "No Analysis Available"}
+        <div className="ds-page min-h-screen min-w-0 bg-[var(--bg)] py-[var(--space-8)]">
+          <div className="min-w-0">
+            <div className="rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--card)] px-[var(--space-8)] py-[var(--space-12)] text-center shadow-[var(--shadow-card)]">
+              <h2 className="ds-h2 mb-[var(--space-4)]">
+                {fetchingLatest ? "Loading latest analysis…" : "No analysis available"}
               </h2>
-              <p className="mb-6 text-[var(--text-secondary)]">
+              <p className="ds-body mb-[var(--space-6)] text-[var(--text-secondary)]">
                 {fetchingLatest
                   ? "Please wait while we load your latest analysis."
                   : "You have not completed any analyses yet. Start a new analysis to see results here."}
@@ -208,9 +220,9 @@ export default function Analysis() {
                 <button
                   type="button"
                   onClick={() => router.push("/advisor-team")}
-                  className="rounded-lg bg-[var(--accent)] px-6 py-3 font-semibold text-white transition hover:opacity-95"
+                  className="ds-btn-primary px-[var(--space-6)] py-3"
                 >
-                  Start New Analysis
+                  Start new analysis
                 </button>
               )}
             </div>
@@ -224,13 +236,11 @@ export default function Analysis() {
     const pipeline = readPipeline(job as ApiJob);
     return (
       <Layout>
-        <div className="min-h-screen bg-[var(--bg)] py-8">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-8 py-10 shadow-[var(--shadow-card)]">
-              <h2 className="text-xl font-semibold text-[var(--text-primary)]">
-                Analysis in progress
-              </h2>
-              <p className="mt-2 text-sm text-[var(--text-secondary)]">
+        <div className="ds-page min-h-screen min-w-0 bg-[var(--bg)] py-[var(--space-8)]">
+          <div className="min-w-0">
+            <div className="rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--card)] px-[var(--space-8)] py-[var(--space-8)] shadow-[var(--shadow-card)]">
+              <h2 className="ds-h2">Analysis in progress</h2>
+              <p className="ds-body mt-[var(--space-2)] text-[var(--text-secondary)]">
                 Stages update as the worker reports pipeline progress.
               </p>
               <ul className="mt-8 max-w-lg space-y-2">
@@ -273,7 +283,7 @@ export default function Analysis() {
               <button
                 type="button"
                 onClick={() => void refreshJob(job.id)}
-                className="mt-8 rounded-lg bg-[var(--accent)] px-6 py-2.5 text-sm font-semibold text-white transition hover:opacity-95"
+                className="ds-btn-primary mt-[var(--space-8)] px-[var(--space-6)] py-2.5"
               >
                 Refresh status
               </button>
@@ -287,11 +297,11 @@ export default function Analysis() {
   if (job.status === "failed") {
     return (
       <Layout>
-        <div className="min-h-screen bg-[var(--bg)] py-8">
-          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-8 py-12 shadow-[var(--shadow-card)]">
-              <h2 className="mb-4 text-2xl font-bold text-[var(--danger)]">Analysis Failed</h2>
-              <p className="mb-4 text-[var(--text-secondary)]">
+        <div className="ds-page min-h-screen min-w-0 bg-[var(--bg)] py-[var(--space-8)]">
+          <div className="min-w-0">
+            <div className="rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--card)] px-[var(--space-8)] py-[var(--space-12)] shadow-[var(--shadow-card)]">
+              <h2 className="ds-h2 mb-[var(--space-4)] text-[var(--danger)]">Analysis failed</h2>
+              <p className="ds-body mb-[var(--space-4)] text-[var(--text-secondary)]">
                 The analysis encountered an error and could not be completed.
               </p>
               {job.error_message && (
@@ -302,9 +312,9 @@ export default function Analysis() {
               <button
                 type="button"
                 onClick={() => router.push("/advisor-team")}
-                className="rounded-lg bg-[var(--accent)] px-6 py-3 font-semibold text-white transition hover:opacity-95"
+                className="ds-btn-primary px-[var(--space-6)] py-3"
               >
-                Try Another Analysis
+                Try another analysis
               </button>
             </div>
           </div>
@@ -316,47 +326,15 @@ export default function Analysis() {
 
   // Tab content renderers
   const renderOverview = () => {
-    const report = job?.report_payload?.content;
-    if (!report) {
+    const report = job?.report_payload?.content?.trim();
+    const summary = job?.summary_payload;
+    const hasSummary = summary && typeof summary === "object" && Object.keys(summary).length > 0;
+    if (!report && !hasSummary) {
       return (
-        <div className="text-center py-12 text-[var(--text-secondary)]">
-          No portfolio report available.
-        </div>
+        <div className="py-12 text-center text-[var(--text-secondary)]">No portfolio report available.</div>
       );
     }
-
-    return (
-      <div className="prose prose-lg max-w-none">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkBreaks]}
-          components={{
-            h1: ({children}) => <h1 className="text-3xl font-bold mb-4 text-[var(--text-primary)]">{children}</h1>,
-            h2: ({children}) => <h2 className="text-2xl font-semibold mb-3 text-[var(--text-primary)] mt-6">{children}</h2>,
-            h3: ({children}) => <h3 className="text-xl font-medium mb-2 text-[var(--text-secondary)] mt-4">{children}</h3>,
-            ul: ({children}) => <ul className="list-disc ml-6 mb-4 space-y-1">{children}</ul>,
-            ol: ({children}) => <ol className="list-decimal ml-6 mb-4 space-y-1">{children}</ol>,
-            li: ({children}) => <li className="text-[var(--text-secondary)]">{children}</li>,
-            p: ({children}) => <p className="mb-4 text-[var(--text-secondary)] leading-relaxed">{children}</p>,
-            table: ({children}) => (
-              <div className="overflow-x-auto mb-6">
-                <table className="w-full border-collapse">{children}</table>
-              </div>
-            ),
-            thead: ({children}) => <thead className="bg-[var(--surface)]">{children}</thead>,
-            th: ({children}) => <th className="p-3 text-left font-semibold border border-[var(--border)]">{children}</th>,
-            td: ({children}) => <td className="p-3 border border-[var(--border)]">{children}</td>,
-            strong: ({children}) => <strong className="font-semibold text-[var(--text-primary)]">{children}</strong>,
-            blockquote: ({children}) => (
-              <blockquote className="border-l-4 border-primary pl-4 my-4 italic text-[var(--text-secondary)]">
-                {children}
-              </blockquote>
-            ),
-          }}
-        >
-          {report}
-        </ReactMarkdown>
-      </div>
-    );
+    return <StructuredJobOverview job={job as ApiJob} />;
   };
 
   const renderCharts = () => {
@@ -411,7 +389,7 @@ export default function Analysis() {
     const chartEntries = Object.entries(chartsPayload);
 
     return (
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-2">
         {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
         {chartEntries.map(([key, chartData]: [string, any]) => {
           // Skip if no data
@@ -420,13 +398,27 @@ export default function Analysis() {
           const chartType = getChartType(chartData);
           const title = chartData.title || formatTitle(key);
 
+          const legend =
+            (chartType === "pie" || chartType === "donut") && chartData.data.length > 6 ? (
+              <div className="grid max-w-full grid-cols-2 gap-2">
+                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                {chartData.data.map((entry: any, idx: number) => (
+                  <div key={entry.name} className="flex min-w-0 items-center text-sm">
+                    <div
+                      className="mr-2 h-3 w-3 shrink-0 rounded-full"
+                      style={{
+                        backgroundColor: entry.color || rt.series[idx % rt.series.length],
+                      }}
+                    />
+                    <span className="min-w-0 truncate text-[var(--text-secondary)]">{entry.name}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null;
+
           return (
-            <div
-              key={key}
-              className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-6 shadow-[var(--shadow-card)]"
-            >
-              <h3 className="text-xl font-semibold mb-4 text-[var(--text-primary)]">{title}</h3>
-              <ResponsiveContainer width="100%" height={300}>
+            <DsChartContainer key={key} title={title} minHeight={300} footer={legend}>
+              <ResponsiveContainer width="100%" height="100%">
                 {chartType === 'pie' || chartType === 'donut' ? (
                   <PieChart>
                     <Pie
@@ -504,26 +496,7 @@ export default function Analysis() {
                   </LineChart>
                 )}
               </ResponsiveContainer>
-
-              {/* Add legend for pie/donut charts with many items */}
-              {(chartType === 'pie' || chartType === 'donut') && chartData.data.length > 6 && (
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                  {chartData.data.map((entry: any, idx: number) => (
-                    <div key={entry.name} className="flex items-center text-sm">
-                      <div
-                        className="w-3 h-3 rounded-full mr-2"
-                        style={{
-                        backgroundColor:
-                          entry.color || rt.series[idx % rt.series.length],
-                      }}
-                      />
-                      <span className="text-[var(--text-secondary)]">{entry.name}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            </DsChartContainer>
           );
         })}
       </div>
@@ -541,32 +514,20 @@ export default function Analysis() {
     }
 
     // Backend provides 'analysis' as markdown text
-    const retirementAnalysis = retirement.analysis;
+    const retirementAnalysis = retirement.analysis?.trim();
+    if (!retirementAnalysis) {
+      return (
+        <div className="py-12 text-center text-[var(--text-secondary)]">No retirement narrative available.</div>
+      );
+    }
 
     return (
-      <div className="space-y-8">
-        {/* Analysis Section */}
-        {retirementAnalysis && (
-          <div className="rounded-lg border border-[color-mix(in_srgb,var(--accent)_25%,var(--border))] bg-[color-mix(in_srgb,var(--accent)_8%,var(--card))] p-6">
-            <div className="prose prose-lg max-w-none">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkBreaks]}
-                components={{
-                  h2: ({children}) => <h2 className="text-2xl font-semibold mb-3 text-[var(--text-primary)]">{children}</h2>,
-                  h3: ({children}) => <h3 className="text-xl font-medium mb-2 text-[var(--text-secondary)]">{children}</h3>,
-                  p: ({children}) => <p className="text-[var(--text-secondary)] leading-relaxed mb-4">{children}</p>,
-                  strong: ({children}) => <strong className="font-semibold text-[var(--text-primary)]">{children}</strong>,
-                  ul: ({children}) => <ul className="list-disc ml-6 mt-2 space-y-1">{children}</ul>,
-                  li: ({children}) => <li className="text-[var(--text-secondary)]">{children}</li>,
-                }}
-              >
-                {retirementAnalysis}
-              </ReactMarkdown>
-            </div>
-          </div>
-        )}
-
-      </div>
+      <MarkdownBriefPanel
+        title="Retirement projection"
+        description="Structured from the retirement agent output. Open the full report for tables and detail."
+        markdown={retirementAnalysis}
+        modalTitle="Full retirement analysis"
+      />
     );
   };
 
@@ -576,72 +537,65 @@ export default function Analysis() {
         <title>{pageTitle("Analysis")}</title>
       </Head>
       <Layout>
-      <div className="min-h-screen bg-[var(--bg)] py-8">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          {/* Header */}
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-[var(--shadow-card)] px-8 py-6 mb-8">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-3xl font-bold text-[var(--text-primary)] mb-2">Portfolio Analysis Results</h1>
-                <p className="text-[var(--text-secondary)]">
-                  Completed on {formatDate(job.created_at)}
-                </p>
-              </div>
+        <div className="ds-page min-h-screen min-w-0 bg-[var(--bg)] py-[var(--space-8)]">
+          <AppPageHero
+            title="Portfolio analysis"
+            subtitle={`Completed ${formatDate(job.created_at)}`}
+            actions={
               <button
-                onClick={() => router.push('/advisor-team')}
-                className="rounded-lg bg-[var(--accent)] px-6 py-3 font-semibold text-white transition hover:opacity-95"
+                type="button"
+                onClick={() => router.push("/advisor-team")}
+                className="ds-btn-primary min-h-0 py-2.5"
               >
-                New Analysis
+                New analysis
               </button>
-            </div>
-          </div>
+            }
+          />
 
-          {/* Tabs */}
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-[var(--shadow-card)] mb-8">
-            <div className="border-b border-[var(--border)]">
-              <nav className="flex -mb-px">
-                <button
-                  onClick={() => setActiveTab('overview')}
-                  className={`py-3 px-8 border-b-2 font-medium text-sm transition-colors ${
-                    activeTab === 'overview'
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  Overview
-                </button>
-                <button
-                  onClick={() => setActiveTab('charts')}
-                  className={`py-3 px-8 border-b-2 font-medium text-sm transition-colors ${
-                    activeTab === 'charts'
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  Charts
-                </button>
-                <button
-                  onClick={() => setActiveTab('retirement')}
-                  className={`py-3 px-8 border-b-2 font-medium text-sm transition-colors ${
-                    activeTab === 'retirement'
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-[var(--text-secondary)] hover:border-[var(--accent)] hover:text-[var(--text-primary)]'
-                  }`}
-                >
-                  Retirement
-                </button>
-              </nav>
-            </div>
-          </div>
+          <div className="ds-shell">
+            <DsCard padding="none" className="ds-shell-span-12 overflow-hidden shadow-[var(--shadow-card)]">
+              <div className="min-w-0 border-b border-[var(--border)]">
+                <nav className="-mb-px flex min-w-0 flex-wrap gap-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("overview")}
+                    className="ds-tab px-5 py-3 text-sm font-medium sm:px-8"
+                    data-active={activeTab === "overview" ? "true" : "false"}
+                  >
+                    Overview
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("charts")}
+                    className="ds-tab px-5 py-3 text-sm font-medium sm:px-8"
+                    data-active={activeTab === "charts" ? "true" : "false"}
+                  >
+                    Charts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("retirement")}
+                    className="ds-tab px-5 py-3 text-sm font-medium sm:px-8"
+                    data-active={activeTab === "retirement" ? "true" : "false"}
+                  >
+                    Retirement
+                  </button>
+                </nav>
+              </div>
+            </DsCard>
 
-          {/* Tab Content */}
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-[var(--shadow-card)] px-8 py-6">
-            {activeTab === 'overview' && renderOverview()}
-            {activeTab === 'charts' && renderCharts()}
-            {activeTab === 'retirement' && renderRetirement()}
+            <DsCard
+              padding="lg"
+              className="ds-shell-span-12 min-h-0 shadow-[var(--shadow-card)]"
+            >
+              <div className="min-w-0 max-h-[min(70vh,720px)] overflow-y-auto">
+                {activeTab === "overview" && renderOverview()}
+                {activeTab === "charts" && renderCharts()}
+                {activeTab === "retirement" && renderRetirement()}
+              </div>
+            </DsCard>
           </div>
         </div>
-      </div>
       </Layout>
     </>
   );

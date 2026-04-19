@@ -7,31 +7,30 @@ import {
 } from "@clerk/nextjs";
 import Head from "next/head";
 import Link from "next/link";
+import DemoIntelligencePreview from "../components/landing/DemoIntelligencePreview";
 import LandingHero from "../components/landing/Hero";
-import ProductSnapshot from "../components/landing/ProductSnapshot";
-import ValuePropositions from "../components/landing/ValuePropositions";
-import HowItWorks from "../components/landing/HowItWorks";
-import SystemTransparency from "../components/landing/SystemTransparency";
 import FinalCTA from "../components/landing/FinalCTA";
+import HowItWorks from "../components/landing/HowItWorks";
+import ValuePropositions from "../components/landing/ValuePropositions";
+import VisualProofMocks from "../components/landing/VisualProofMocks";
+import WhatWeAnalyze from "../components/landing/WhatWeAnalyze";
 import { AlexFinLogo } from "@/components/brand/AlexFinLogo";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { BRAND_NAME, PRODUCT_SUBTITLE, pageTitle } from "@/lib/brand";
 
 export default function Home() {
   return (
     <>
       <Head>
-        <title>{pageTitle("AI Financial Intelligence Platform")}</title>
+        <title>{pageTitle("AI Wealth Intelligence")}</title>
         <meta name="description" content={PRODUCT_SUBTITLE} />
       </Head>
-      <div className="min-h-screen bg-[var(--bg)] text-[var(--text-primary)]">
+      <div className="landing-fintech min-h-screen bg-[var(--bg)] text-[var(--text-primary)]">
         <header className="sticky top-0 z-20 border-b border-[var(--border)] bg-[var(--surface)]/95 backdrop-blur-md">
           <div className="mx-auto flex max-w-[1200px] items-center justify-between px-6 py-3.5">
             <Link href="/" className="flex items-center" aria-label={BRAND_NAME}>
               <AlexFinLogo variant="horizontal" className="h-7 w-auto" />
             </Link>
             <nav className="flex items-center gap-2 sm:gap-3">
-              <ThemeToggle />
               <SignedOut>
                 <SignInButton mode="modal">
                   <button
@@ -65,10 +64,11 @@ export default function Home() {
 
         <main>
           <LandingHero />
-          <ProductSnapshot />
+          <WhatWeAnalyze />
+          <DemoIntelligencePreview />
           <ValuePropositions />
+          <VisualProofMocks />
           <HowItWorks />
-          <SystemTransparency />
           <FinalCTA />
         </main>
 

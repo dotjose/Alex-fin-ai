@@ -1,11 +1,19 @@
 import { useAuth, useUser } from "@clerk/nextjs";
 import Head from "next/head";
-import { pageTitle } from "@/lib/brand";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Layout from "../components/Layout";
 import { getApiUrl } from "../lib/config";
 import { Skeleton, SkeletonText } from "../components/Skeleton";
 import { showToast } from "../components/Toast";
+import {
+  DsBadge,
+  DsCard,
+  DsDualPercentControl,
+  DsField,
+  DsTextInput,
+} from "@/components/ds";
+import { AppPageHero } from "@/components/shell/AppPageHero";
+import { pageTitle } from "@/lib/brand";
 
 interface UserRow {
   display_name?: string;
@@ -15,10 +23,50 @@ interface UserRow {
   region_targets?: { north_america?: number; international?: number };
 }
 
+type SettingsSnapshot = {
+  displayName: string;
+  targetRetirementIncome: number;
+  yearsUntilRetirement: number;
+  equityTarget: number;
+  northAmericaTarget: number;
+};
+
 function num(v: unknown, fallback: number): number {
   if (v === null || v === undefined) return fallback;
   const n = typeof v === "string" ? parseFloat(v) : Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** Returns a 0–100 “left” value; pair sums to 100 with `100 - left`. */
+function coercePairToLeft(a: unknown, b: unknown): number {
+  let x = typeof a === "string" ? parseFloat(a) : Number(a);
+  let y = typeof b === "string" ? parseFloat(b) : Number(b);
+  if (!Number.isFinite(x)) x = 0;
+  if (!Number.isFinite(y)) y = 0;
+  if (x <= 1 && y <= 1 && x + y > 0.001 && x + y <= 2.001) {
+    x *= 100;
+    y *= 100;
+  }
+  const sum = x + y;
+  if (sum <= 0.01) return 50;
+  const left = Math.round((x / sum) * 100);
+  return Math.max(0, Math.min(100, left));
+}
+
+function snapshotFromFields(
+  displayName: string,
+  targetRetirementIncome: number,
+  yearsUntilRetirement: number,
+  equityTarget: number,
+  northAmericaTarget: number
+): SettingsSnapshot {
+  return {
+    displayName: displayName.trim(),
+    targetRetirementIncome,
+    yearsUntilRetirement,
+    equityTarget,
+    northAmericaTarget,
+  };
 }
 
 export default function SettingsPage() {
@@ -26,13 +74,32 @@ export default function SettingsPage() {
   const { getToken } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveFlash, setSaveFlash] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [yearsUntilRetirement, setYearsUntilRetirement] = useState(0);
   const [targetRetirementIncome, setTargetRetirementIncome] = useState(0);
-  const [equityTarget, setEquityTarget] = useState(0);
-  const [fixedIncomeTarget, setFixedIncomeTarget] = useState(0);
-  const [northAmericaTarget, setNorthAmericaTarget] = useState(0);
-  const [internationalTarget, setInternationalTarget] = useState(0);
+  const [equityTarget, setEquityTarget] = useState(50);
+  const [northAmericaTarget, setNorthAmericaTarget] = useState(50);
+  const [baseline, setBaseline] = useState<SettingsSnapshot | null>(null);
+
+  const fixedIncomeTarget = 100 - equityTarget;
+  const internationalTarget = 100 - northAmericaTarget;
+
+  const currentSnapshot = useMemo(
+    () =>
+      snapshotFromFields(
+        displayName,
+        targetRetirementIncome,
+        yearsUntilRetirement,
+        equityTarget,
+        northAmericaTarget
+      ),
+    [displayName, targetRetirementIncome, yearsUntilRetirement, equityTarget, northAmericaTarget]
+  );
+
+  const isDirty = Boolean(
+    baseline && JSON.stringify(currentSnapshot) !== JSON.stringify(baseline)
+  );
 
   const load = useCallback(async () => {
     if (!userLoaded || !user) return;
@@ -47,25 +114,30 @@ export default function SettingsPage() {
       const body = await res.json();
       if (body.user) {
         const u = body.user as UserRow;
-        setDisplayName(u.display_name ?? "");
-        setYearsUntilRetirement(num(u.years_until_retirement, 0));
-        setTargetRetirementIncome(num(u.target_retirement_income, 0));
-        setEquityTarget(num(u.asset_class_targets?.equity, 0));
-        setFixedIncomeTarget(num(u.asset_class_targets?.fixed_income, 0));
-        setNorthAmericaTarget(num(u.region_targets?.north_america, 0));
-        setInternationalTarget(num(u.region_targets?.international, 0));
+        const dn = u.display_name ?? "";
+        const yrs = num(u.years_until_retirement, 0);
+        const tri = num(u.target_retirement_income, 0);
+        const eq = coercePairToLeft(u.asset_class_targets?.equity, u.asset_class_targets?.fixed_income);
+        const na = coercePairToLeft(u.region_targets?.north_america, u.region_targets?.international);
+        setDisplayName(dn);
+        setYearsUntilRetirement(yrs);
+        setTargetRetirementIncome(tri);
+        setEquityTarget(eq);
+        setNorthAmericaTarget(na);
+        setBaseline(snapshotFromFields(dn, tri, yrs, eq, na));
       } else if (body.user_id) {
-        setDisplayName(
-          user.fullName ||
-            user.primaryEmailAddress?.emailAddress?.split("@")[0] ||
-            ""
-        );
-        setYearsUntilRetirement(0);
-        setTargetRetirementIncome(0);
-        setEquityTarget(50);
-        setFixedIncomeTarget(50);
-        setNorthAmericaTarget(50);
-        setInternationalTarget(50);
+        const dn =
+          user.fullName || user.primaryEmailAddress?.emailAddress?.split("@")[0] || "";
+        const yrs = 0;
+        const tri = 0;
+        const eq = 50;
+        const na = 50;
+        setDisplayName(dn);
+        setYearsUntilRetirement(yrs);
+        setTargetRetirementIncome(tri);
+        setEquityTarget(eq);
+        setNorthAmericaTarget(na);
+        setBaseline(snapshotFromFields(dn, tri, yrs, eq, na));
       } else {
         throw new Error("Unexpected user response");
       }
@@ -85,20 +157,8 @@ export default function SettingsPage() {
       showToast("error", "Display name is required");
       return;
     }
-    if (yearsUntilRetirement < 0 || yearsUntilRetirement > 50) {
-      showToast("error", "Years until retirement must be between 0 and 50");
-      return;
-    }
     if (targetRetirementIncome < 0) {
       showToast("error", "Target retirement income must be positive");
-      return;
-    }
-    if (Math.abs(equityTarget + fixedIncomeTarget - 100) > 0.01) {
-      showToast("error", "Equity and fixed income must sum to 100%");
-      return;
-    }
-    if (Math.abs(northAmericaTarget + internationalTarget - 100) > 0.01) {
-      showToast("error", "North America and international must sum to 100%");
       return;
     }
 
@@ -130,15 +190,21 @@ export default function SettingsPage() {
       const saveBody = await res.json();
       if (saveBody.user) {
         const u = saveBody.user as UserRow;
-        setDisplayName(u.display_name ?? "");
-        setYearsUntilRetirement(num(u.years_until_retirement, 0));
-        setTargetRetirementIncome(num(u.target_retirement_income, 0));
-        setEquityTarget(num(u.asset_class_targets?.equity, 0));
-        setFixedIncomeTarget(num(u.asset_class_targets?.fixed_income, 0));
-        setNorthAmericaTarget(num(u.region_targets?.north_america, 0));
-        setInternationalTarget(num(u.region_targets?.international, 0));
+        const dn = u.display_name ?? "";
+        const yrs = num(u.years_until_retirement, 0);
+        const tri = num(u.target_retirement_income, 0);
+        const eq = coercePairToLeft(u.asset_class_targets?.equity, u.asset_class_targets?.fixed_income);
+        const na = coercePairToLeft(u.region_targets?.north_america, u.region_targets?.international);
+        setDisplayName(dn);
+        setYearsUntilRetirement(yrs);
+        setTargetRetirementIncome(tri);
+        setEquityTarget(eq);
+        setNorthAmericaTarget(na);
+        setBaseline(snapshotFromFields(dn, tri, yrs, eq, na));
       }
       showToast("success", "Settings saved");
+      setSaveFlash(true);
+      window.setTimeout(() => setSaveFlash(false), 800);
     } catch (e) {
       showToast("error", e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -146,132 +212,156 @@ export default function SettingsPage() {
     }
   };
 
+  const saveDisabled = saving || !displayName.trim() || !isDirty;
+
   return (
     <>
       <Head>
         <title>{pageTitle("Settings")}</title>
       </Head>
       <Layout>
-        <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 lg:px-8">
-          <h1 className="text-3xl font-semibold tracking-tight text-[var(--text-primary)]">
-            Settings
-          </h1>
-          <p className="mt-2 text-sm text-[var(--text-secondary)]">
-            All fields reflect your profile from the API. Updates are saved with{" "}
-            <code className="rounded bg-[var(--surface)] px-1 text-xs">PUT /api/user</code>
-            .
-          </p>
+        <div className="ds-page min-w-0 py-[var(--space-8)]">
+          <AppPageHero
+            title="Settings"
+            subtitle="Profile and portfolio assumptions used by analysis jobs. Changes apply after you save."
+          />
 
-          <div className="mt-10 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-8 shadow-[var(--shadow-card)]">
-            {loading ? (
-              <div className="space-y-4">
-                <Skeleton className="h-10 w-full" />
-                <SkeletonText lines={4} />
-              </div>
-            ) : (
-              <div className="space-y-8">
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)]">
-                    Display name
-                  </label>
-                  <input
-                    type="text"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    className="mt-2 w-full rounded-xl border border-[var(--border)] px-3 py-2 text-sm outline-none ring-primary/30 focus:ring-2"
-                  />
+          <div className="ds-shell">
+            <DsCard padding="lg" className="ds-shell-span-12 ds-stack-4">
+              {loading ? (
+                <div className="ds-stack-3">
+                  <Skeleton className="h-11 w-full" />
+                  <SkeletonText lines={4} />
                 </div>
+              ) : (
+                <>
+                  <section className="ds-stack-3 min-w-0">
+                    <h2 className="ds-h2">Profile</h2>
+                    <DsField id="display_name" label="Display name" layout="row" hint="Shown in the app shell.">
+                      <DsTextInput
+                        id="display_name"
+                        type="text"
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        autoComplete="name"
+                      />
+                    </DsField>
+                  </section>
 
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)]">
-                    Target retirement income (annual, USD)
-                  </label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={
-                      targetRetirementIncome
-                        ? targetRetirementIncome.toLocaleString("en-US")
-                        : ""
-                    }
-                    onChange={(e) => {
-                      const raw = e.target.value.replace(/,/g, "");
-                      const n = parseInt(raw, 10);
-                      setTargetRetirementIncome(Number.isFinite(n) ? n : 0);
-                    }}
-                    className="mt-2 w-full rounded-xl border border-[var(--border)] px-3 py-2 text-sm outline-none ring-primary/30 focus:ring-2"
-                  />
-                </div>
+                  <hr className="ds-section-divider" />
 
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)]">
-                    Years until retirement: {yearsUntilRetirement}
-                  </label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={50}
-                    value={yearsUntilRetirement}
-                    onChange={(e) =>
-                      setYearsUntilRetirement(Number(e.target.value))
-                    }
-                    className="mt-3 w-full accent-primary"
-                  />
-                </div>
+                  <section className="ds-stack-3 min-w-0">
+                    <h2 className="ds-h2">Retirement assumptions</h2>
+                    <DsField
+                      id="target_retirement_income"
+                      label="Target retirement income (annual, USD)"
+                      layout="row"
+                      hint="Whole dollars; used in retirement projections."
+                    >
+                      <DsTextInput
+                        id="target_retirement_income"
+                        type="text"
+                        inputMode="numeric"
+                        value={
+                          targetRetirementIncome
+                            ? targetRetirementIncome.toLocaleString("en-US")
+                            : ""
+                        }
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/,/g, "");
+                          const n = parseInt(raw, 10);
+                          setTargetRetirementIncome(Number.isFinite(n) ? n : 0);
+                        }}
+                      />
+                    </DsField>
+                    <div className="grid min-w-0 gap-[var(--space-2)] sm:grid-cols-[minmax(0,200px)_1fr] sm:items-start sm:gap-[var(--space-4)]">
+                      <span className="ds-caption pt-2.5 text-left normal-case tracking-normal text-[var(--text-secondary)] sm:pt-0">
+                        Years until retirement
+                      </span>
+                      <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-2)]">
+                        <DsBadge variant="neutral">{yearsUntilRetirement} yrs</DsBadge>
+                        <span className="ds-body text-[var(--text-secondary)]">
+                          Read-only from your profile.
+                        </span>
+                      </div>
+                    </div>
+                  </section>
 
-                <div>
-                  <h2 className="text-sm font-semibold text-[var(--text-primary)]">
-                    Target asset class mix
-                  </h2>
-                  <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                    Equity {equityTarget}% · Fixed income {fixedIncomeTarget}%
-                  </p>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={equityTarget}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setEquityTarget(v);
-                      setFixedIncomeTarget(100 - v);
-                    }}
-                    className="mt-3 w-full accent-primary"
-                  />
-                </div>
+                  <hr className="ds-section-divider" />
 
-                <div>
-                  <h2 className="text-sm font-semibold text-[var(--text-primary)]">
-                    Target regional mix
-                  </h2>
-                  <p className="mt-1 text-xs text-[var(--text-secondary)]">
-                    North America {northAmericaTarget}% · International{" "}
-                    {internationalTarget}%
-                  </p>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={northAmericaTarget}
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setNorthAmericaTarget(v);
-                      setInternationalTarget(100 - v);
-                    }}
-                    className="mt-3 w-full accent-primary"
-                  />
-                </div>
+                  <section className="ds-stack-3 min-w-0">
+                    <h2 className="ds-h2">Allocation</h2>
+                    <p className="ds-body text-[var(--text-secondary)]">
+                      Equity and fixed income always total 100%. Adjust the slider or enter percentages
+                      directly.
+                    </p>
+                    <DsField
+                      id="equity_mix"
+                      label="Equity vs fixed income"
+                      layout="row"
+                      hint="Single source of truth: moving equity updates fixed income automatically."
+                    >
+                      <DsDualPercentControl
+                        id="equity_mix"
+                        leftLabel="Equity"
+                        rightLabel="Fixed income"
+                        leftPct={equityTarget}
+                        onLeftPctChange={setEquityTarget}
+                      />
+                    </DsField>
+                  </section>
 
-                <button
-                  type="button"
-                  onClick={() => void handleSave()}
-                  disabled={saving}
-                  className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-white transition hover:bg-primary/90 disabled:opacity-50"
-                >
-                  {saving ? "Saving…" : "Save changes"}
-                </button>
-              </div>
-            )}
+                  <hr className="ds-section-divider" />
+
+                  <section className="ds-stack-3 min-w-0">
+                    <h2 className="ds-h2">Region mix</h2>
+                    <p className="ds-body text-[var(--text-secondary)]">
+                      North America and international always total 100%.
+                    </p>
+                    <DsField
+                      id="region_mix"
+                      label="North America vs international"
+                      layout="row"
+                      hint="Single source of truth: both controls stay in sync."
+                    >
+                      <DsDualPercentControl
+                        id="region_mix"
+                        leftLabel="North America"
+                        rightLabel="International"
+                        leftPct={northAmericaTarget}
+                        onLeftPctChange={setNorthAmericaTarget}
+                      />
+                    </DsField>
+                  </section>
+
+                  <hr className="ds-section-divider" />
+
+                  <section className="ds-stack-3 min-w-0">
+                    <h2 className="ds-h2">Save</h2>
+                    <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-3)]">
+                      <button
+                        type="button"
+                        className="ds-btn-primary"
+                        onClick={() => void handleSave()}
+                        disabled={saveDisabled}
+                      >
+                        {saving ? "Saving…" : "Save changes"}
+                      </button>
+                      {isDirty ? (
+                        <DsBadge variant="neutral">Unsaved changes</DsBadge>
+                      ) : (
+                        <span className="ds-body text-[var(--text-secondary)]">All changes saved</span>
+                      )}
+                      {saving ? (
+                        <span className="ds-body text-[var(--text-secondary)]">Writing…</span>
+                      ) : saveFlash ? (
+                        <span className="ds-save-pop ds-body font-semibold text-[var(--success)]">Saved</span>
+                      ) : null}
+                    </div>
+                  </section>
+                </>
+              )}
+            </DsCard>
           </div>
         </div>
       </Layout>

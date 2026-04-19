@@ -1,12 +1,15 @@
 import { useAuth } from "@clerk/nextjs";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/router";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import Layout from "../components/Layout";
 import ConfirmModal from "../components/ConfirmModal";
 import { getApiUrl } from "../lib/config";
 import { SkeletonTable } from "../components/Skeleton";
 import Head from "next/head";
 import { pageTitle } from "@/lib/brand";
+import { AppPageHero } from "@/components/shell/AppPageHero";
+import { DsCard, DsMetricTile } from "@/components/ds";
 
 interface Position {
   id: string;
@@ -192,81 +195,76 @@ export default function Accounts() {
     return parts.join('.');
   };
 
+  const totalPositions = accounts.reduce((sum, acc) => sum + (acc.positions?.length || 0), 0);
+
   return (
     <>
       <Head>
         <title>{pageTitle("Accounts")}</title>
       </Head>
       <Layout>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6 rounded-lg border border-[var(--border)] bg-[var(--card)] p-6 shadow-[var(--shadow-card)]">
-          <div className="flex justify-between items-center mb-6">
-            <div>
-              <h2 className="text-2xl font-bold text-[var(--text-primary)]">
-                Investment Accounts
-              </h2>
-              <p className="text-sm text-[var(--text-secondary)] mt-1">Manage your investment accounts and portfolios</p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                Add Account
-              </button>
-            </div>
-          </div>
-
-          {message && (
-            <div className={`mb-4 p-4 rounded-lg ${
-              message.type === 'success'
-                ? 'border border-[color-mix(in_srgb,var(--success)_35%,var(--border))] bg-[color-mix(in_srgb,var(--success)_10%,var(--card))] text-[var(--success)]'
-                : 'border border-[color-mix(in_srgb,var(--danger)_35%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] text-[var(--danger)]'
-            }`}>
-              {message.text}
-            </div>
-          )}
-
-          {loading ? (
-            <SkeletonTable rows={3} />
-          ) : accounts.length === 0 ? (
-            <div className="bg-primary/10 border border-primary/20 rounded-lg p-6 text-center">
-              <p className="text-primary font-semibold mb-2">
-                No accounts found
-              </p>
-              <p className="text-sm text-[var(--text-secondary)]">
-                Use &quot;Add Account&quot; to create an account, then add positions from the dashboard or API.
-              </p>
-            </div>
-          ) : (
-            <>
-              {/* Portfolio Summary */}
-              <div className="bg-[var(--surface)] rounded-lg p-4 mb-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <p className="text-sm text-[var(--text-secondary)]">Total Portfolio Value</p>
-                    <p className="text-2xl font-bold text-primary">
-                      ${calculatePortfolioTotal().toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </p>
+        <div className="ds-page min-w-0 py-[var(--space-8)]">
+          <AppPageHero
+            title="Investment accounts"
+            subtitle="Manage linked accounts, cash balances, and positions."
+            kpi={
+              !loading && accounts.length > 0 ? (
+                <div className="ds-shell">
+                  <div className="ds-grid-item ds-shell-span-4 min-w-0">
+                    <DsMetricTile
+                      label="Total portfolio value"
+                      value={`$${calculatePortfolioTotal().toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}`}
+                    />
                   </div>
-                  <div>
-                    <p className="text-sm text-[var(--text-secondary)]">Number of Accounts</p>
-                    <p className="text-2xl font-bold text-[var(--text-primary)]">{accounts.length}</p>
+                  <div className="ds-grid-item ds-shell-span-4 min-w-0">
+                    <DsMetricTile label="Accounts" value={accounts.length} />
                   </div>
-                  <div>
-                    <p className="text-sm text-[var(--text-secondary)]">Total Positions</p>
-                    <p className="text-2xl font-bold text-[var(--text-primary)]">
-                      {accounts.reduce((sum, acc) => sum + (acc.positions?.length || 0), 0)}
-                    </p>
+                  <div className="ds-grid-item ds-shell-span-4 min-w-0">
+                    <DsMetricTile label="Open positions" value={totalPositions} />
                   </div>
                 </div>
+              ) : null
+            }
+          />
+
+          <div className="ds-shell">
+            <DsCard padding="lg" className="ds-shell-span-12 ds-stack-4">
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-[var(--space-4)]">
+                <p className="ds-body min-w-0 text-[var(--text-secondary)]">
+                  Add accounts to power portfolio analysis and reporting.
+                </p>
+                <button type="button" className="ds-btn-primary shrink-0" onClick={() => setShowAddModal(true)}>
+                  <Plus className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+                  Add account
+                </button>
               </div>
 
-              {/* Accounts Table */}
-              <div className="overflow-x-auto">
+              {message ? (
+                <div
+                  className={`rounded-[var(--radius-card)] border p-[var(--space-4)] ${
+                    message.type === "success"
+                      ? "border-[color-mix(in_srgb,var(--success)_35%,var(--border))] bg-[color-mix(in_srgb,var(--success)_10%,var(--card))] text-[var(--success)]"
+                      : "border-[color-mix(in_srgb,var(--danger)_35%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] text-[var(--danger)]"
+                  }`}
+                >
+                  <p className="ds-body">{message.text}</p>
+                </div>
+              ) : null}
+
+              {loading ? (
+                <SkeletonTable rows={3} />
+              ) : accounts.length === 0 ? (
+                <div className="rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-6)] text-center">
+                  <p className="ds-h3 mb-[var(--space-2)]">No accounts yet</p>
+                  <p className="ds-body text-[var(--text-secondary)]">
+                    Use &quot;Add account&quot; to create one, then add positions from the dashboard or API.
+                  </p>
+                </div>
+              ) : (
+                <div className="min-w-0 overflow-x-auto rounded-[var(--radius-card)] border border-[var(--border)]">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-[var(--border)]">
@@ -306,34 +304,32 @@ export default function Accounts() {
                             ${Number(account.cash_balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
                           <td className="py-4 px-4 text-right">
-                            <p className="font-semibold text-primary">
+                            <p className="ds-body font-semibold text-[var(--accent)]">
                               ${calculateAccountTotal(account).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </p>
                           </td>
                           <td className="py-4 px-4">
                             <div className="flex justify-center gap-2">
                               <button
+                                type="button"
                                 onClick={() => router.push(`/accounts/${account.id}`)}
-                                className="text-primary hover:bg-primary/10 p-2 rounded transition-colors"
+                                className="rounded-[var(--radius-control)] p-2 text-[var(--accent)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent)_12%,var(--card))]"
                                 title="View/Edit"
                               >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                                </svg>
+                                <Pencil className="h-4 w-4" strokeWidth={2} aria-hidden />
                               </button>
                               <button
+                                type="button"
                                 onClick={() => setConfirmModal({
                                   isOpen: true,
                                   accountId: account.id,
                                   accountName: account.account_name
                                 })}
                                 disabled={deletingAccountId === account.id}
-                                className="rounded p-2 text-[var(--danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] disabled:opacity-50"
+                                className="rounded-[var(--radius-control)] p-2 text-[var(--danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] disabled:opacity-50"
                                 title="Delete"
                               >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
+                                <Trash2 className="h-4 w-4" strokeWidth={2} aria-hidden />
                               </button>
                             </div>
                           </td>
@@ -342,55 +338,55 @@ export default function Accounts() {
                     })}
                   </tbody>
                 </table>
-              </div>
-            </>
-          )}
-        </div>
+                </div>
+              )}
+            </DsCard>
+          </div>
 
         {/* Add Account Modal */}
         {showAddModal && (
-          <div className="fixed inset-0 bg-[var(--overlay)] flex items-center justify-center z-50 p-4">
-            <div className="bg-[var(--card)] rounded-lg max-w-md w-full p-6">
-              <h3 className="text-xl font-bold text-[var(--text-primary)] mb-4">Add New Account</h3>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] p-[var(--space-4)]">
+            <div className="w-full max-w-md rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--card)] p-[var(--space-6)] shadow-[var(--shadow-card)]">
+              <h3 className="ds-h3 mb-[var(--space-4)]">Add new account</h3>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                    Account Name *
+              <div className="ds-stack-3">
+                <div className="min-w-0">
+                  <label className="ds-caption mb-1 block normal-case tracking-normal text-[var(--text-secondary)]">
+                    Account name *
                   </label>
                   <input
                     type="text"
                     value={newAccount.name}
                     onChange={(e) => setNewAccount({ ...newAccount, name: e.target.value })}
-                    className="w-full border border-[var(--border)] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="box-border h-11 w-full min-w-0 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--bg)] px-3 text-sm text-[var(--text-primary)] outline-none focus:border-[color-mix(in_srgb,var(--accent)_55%,var(--border))] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--accent)_25%,transparent)]"
                     placeholder="e.g., 401k, Roth IRA, Brokerage"
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                    Account Purpose
+                <div className="min-w-0">
+                  <label className="ds-caption mb-1 block normal-case tracking-normal text-[var(--text-secondary)]">
+                    Account purpose
                   </label>
                   <input
                     type="text"
                     value={newAccount.purpose}
                     onChange={(e) => setNewAccount({ ...newAccount, purpose: e.target.value })}
-                    className="w-full border border-[var(--border)] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
-                    placeholder="e.g., Long-term Growth, Retirement"
+                    className="box-border h-11 w-full min-w-0 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--bg)] px-3 text-sm text-[var(--text-primary)] outline-none focus:border-[color-mix(in_srgb,var(--accent)_55%,var(--border))] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--accent)_25%,transparent)]"
+                    placeholder="e.g., Long-term growth, retirement"
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1">
-                    Initial Cash Balance
+                <div className="min-w-0">
+                  <label className="ds-caption mb-1 block normal-case tracking-normal text-[var(--text-secondary)]">
+                    Initial cash balance
                   </label>
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[var(--text-secondary)]">$</span>
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary)]">$</span>
                     <input
                       type="text"
                       value={newAccount.cash_balance}
                       onChange={(e) => setNewAccount({ ...newAccount, cash_balance: formatCurrencyInput(e.target.value) })}
-                      className="w-full border border-[var(--border)] rounded-lg pl-8 pr-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                      className="box-border h-11 w-full min-w-0 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--bg)] pl-8 pr-3 text-sm text-[var(--text-primary)] outline-none focus:border-[color-mix(in_srgb,var(--accent)_55%,var(--border))] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--accent)_25%,transparent)]"
                       placeholder="0.00"
                     />
                   </div>
@@ -398,26 +394,28 @@ export default function Accounts() {
               </div>
 
               {message && message.type === 'error' && (
-                <div className="mt-4 rounded-lg border border-[color-mix(in_srgb,var(--danger)_35%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] p-3 text-sm text-[var(--danger)]">
+                <div className="mt-[var(--space-4)] rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--danger)_35%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] p-[var(--space-3)] text-sm text-[var(--danger)]">
                   {message.text}
                 </div>
               )}
 
-              <div className="flex gap-3 mt-6">
+              <div className="mt-[var(--space-6)] flex flex-wrap gap-[var(--space-3)]">
                 <button
+                  type="button"
                   onClick={handleAddAccount}
                   disabled={savingAccount}
-                  className="flex-1 bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+                  className="ds-btn-primary min-h-0 flex-1 py-2"
                 >
-                  {savingAccount ? 'Creating...' : 'Create Account'}
+                  {savingAccount ? 'Creating…' : 'Create account'}
                 </button>
                 <button
+                  type="button"
                   onClick={() => {
                     setShowAddModal(false);
                     setNewAccount({ name: '', purpose: '', cash_balance: '' });
                     setMessage(null);
                   }}
-                  className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-[var(--text-secondary)] transition-colors hover:bg-[var(--card)]"
+                  className="ds-btn-secondary min-h-0 flex-1 py-2"
                 >
                   Cancel
                 </button>
@@ -451,7 +449,7 @@ export default function Accounts() {
           onCancel={() => setConfirmModal({ isOpen: false })}
           isProcessing={deletingAccountId !== null}
         />
-      </div>
+        </div>
       </Layout>
     </>
   );

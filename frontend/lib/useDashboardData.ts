@@ -29,6 +29,7 @@ export interface ApiJob {
   id: string;
   status: string;
   created_at: string;
+  job_type?: string;
   completed_at?: string;
   request_payload?: {
     _orch?: {
@@ -206,6 +207,12 @@ export function useDashboardData(
           }
         }
       }
+    }
+
+    const sumParts = Object.values(breakdown).reduce((s, v) => s + toNumber(v), 0);
+    const gap = Math.max(0, total - sumParts);
+    if (gap > 0.005) {
+      breakdown.unclassified = toNumber(breakdown.unclassified) + gap;
     }
 
     return { totalValue: total, assetClassBreakdown: breakdown };

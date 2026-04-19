@@ -4,14 +4,16 @@ import type { ReactNode } from "react";
 type Padding = "md" | "lg";
 
 const paddingClass: Record<Padding, string> = {
-  md: "p-6",
-  lg: "p-8",
+  md: "p-[var(--space-4)]",
+  lg: "p-[var(--space-6)]",
 };
 
 export interface FinancialCardProps {
   children: ReactNode;
   className?: string;
   padding?: Padding;
+  /** Dense dashboard panels: border-forward, minimal shadow. */
+  elevation?: "default" | "flat";
 }
 
 /**
@@ -21,10 +23,15 @@ export function FinancialCard({
   children,
   className = "",
   padding = "lg",
+  elevation = "default",
 }: FinancialCardProps) {
+  const shadowClass =
+    elevation === "flat"
+      ? "shadow-none hover:border-[color-mix(in_srgb,var(--accent)_22%,var(--border))]"
+      : "shadow-[var(--shadow-card)] hover:shadow-[var(--shadow-card-hover)]";
   return (
     <section
-      className={`rounded-xl border border-[var(--border)] bg-[var(--card)] ${paddingClass[padding]} shadow-[var(--shadow-card)] transition-[box-shadow,transform] duration-200 ease-out hover:-translate-y-px hover:shadow-[var(--shadow-card-hover)] ${className}`.trim()}
+      className={`ds-card-interactive min-w-0 overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--card)] ${paddingClass[padding]} ${shadowClass} ${className}`.trim()}
     >
       {children}
     </section>

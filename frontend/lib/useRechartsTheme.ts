@@ -14,9 +14,9 @@ export type RechartsTheme = {
 function readChartTheme(): RechartsTheme {
   if (typeof document === "undefined") {
     return {
-      textSecondary: "#5B6573",
-      textPrimary: "#0B0F14",
-      grid: "#E6EAF0",
+      textSecondary: "#6B7280",
+      textPrimary: "#111827",
+      grid: "#E5E7EB",
       accent: "#4C82FB",
       danger: "#EF4444",
       warning: "#F2C94C",

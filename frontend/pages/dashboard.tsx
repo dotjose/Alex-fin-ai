@@ -1,12 +1,19 @@
 import { useAuth, useUser } from "@clerk/nextjs";
 import Head from "next/head";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../components/Layout";
-import Hero from "../components/dashboard/Hero";
-import Insights from "../components/dashboard/Insights";
-import PortfolioChart from "../components/dashboard/PortfolioChart";
+import AnalysisControlCard from "../components/dashboard/AnalysisControlCard";
 import Accounts from "../components/dashboard/Accounts";
-import InstitutionalDashboardCharts from "../components/dashboard/InstitutionalDashboardCharts";
+import { AccountsSummaryCard } from "../components/dashboard/AccountsSummaryCard";
+import { DashboardActivityCard } from "../components/dashboard/DashboardActivityCard";
+import { DashboardAllocationPanel } from "../components/dashboard/DashboardChartPanels";
+import { DashboardHeroKpis } from "../components/dashboard/DashboardHeroKpis";
+import { DashboardPerformanceCard } from "../components/dashboard/DashboardPerformanceCard";
+import Insights from "../components/dashboard/Insights";
+import { AppPageHero } from "@/components/shell/AppPageHero";
+import { portfolioValueTimeline } from "@/lib/dashboardChartData";
+import { useDashboardChartModel } from "@/lib/useDashboardChartModel";
+import { useRechartsTheme } from "@/lib/useRechartsTheme";
 import { getApiUrl } from "../lib/config";
 import {
   emitAnalysisCompleted,
@@ -16,6 +23,7 @@ import {
 import { showToast } from "../components/Toast";
 import { fetchCapabilities } from "../lib/capabilities";
 import { useDashboardData } from "../lib/useDashboardData";
+import { riskBadgeFromPortfolio } from "@/lib/dashboardRiskBadge";
 import { DASHBOARD_HEADING, pageTitle } from "@/lib/brand";
 import type { ApiJob } from "@/lib/useDashboardData";
 
@@ -50,8 +58,39 @@ export default function Dashboard() {
   const [analysisRunStartedAt, setAnalysisRunStartedAt] = useState<number | null>(
     null
   );
+  const [analysisSlow, setAnalysisSlow] = useState(false);
+  const [analysisTimedOut, setAnalysisTimedOut] = useState(false);
+  const [dataFreshAt, setDataFreshAt] = useState<Date | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollFailRef = useRef(0);
+
+  useEffect(() => {
+    if (!loading && enabled) {
+      setDataFreshAt(new Date());
+    }
+  }, [loading, enabled]);
+
+  const riskBadge = useMemo(
+    () => riskBadgeFromPortfolio(assetClassBreakdown, totalValue, totalPositionsCount),
+    [assetClassBreakdown, totalValue, totalPositionsCount]
+  );
+
+  const performanceDeltaPct = useMemo(() => {
+    const tl = portfolioValueTimeline(jobs, totalValue);
+    if (tl.length < 2) return null;
+    const a = tl[tl.length - 2]!.value;
+    const b = tl[tl.length - 1]!.value;
+    if (!Number.isFinite(a) || a <= 0 || !Number.isFinite(b)) return null;
+    return ((b - a) / a) * 100;
+  }, [jobs, totalValue]);
+
+  const chartModel = useDashboardChartModel({
+    totalPositionsCount,
+    assetClassBreakdown,
+    totalValue,
+    jobs,
+  });
+  const rt = useRechartsTheme();
 
   useEffect(() => {
     void fetchCapabilities()
@@ -80,11 +119,41 @@ export default function Dashboard() {
       setAnalysisRunning(false);
       setLiveJob(null);
       setAnalysisRunStartedAt(null);
+      setAnalysisSlow(false);
+      setAnalysisTimedOut(false);
     }
   }, [enabled, clearPoll]);
 
+  useEffect(() => {
+    if (!analysisRunning || analysisRunStartedAt == null) {
+      setAnalysisSlow(false);
+      return;
+    }
+    const t = window.setTimeout(() => setAnalysisSlow(true), 10_000);
+    return () => clearTimeout(t);
+  }, [analysisRunning, analysisRunStartedAt]);
+
+  useEffect(() => {
+    if (!analysisRunning || analysisRunStartedAt == null) return;
+    const t = window.setTimeout(() => {
+      clearPoll();
+      setAnalysisRunning(false);
+      setLiveJob(null);
+      setAnalysisRunStartedAt(null);
+      setAnalysisSlow(false);
+      setAnalysisTimedOut(true);
+      showToast(
+        "error",
+        "Stopped waiting for this run. Open the analysis workspace to confirm job status."
+      );
+    }, 180_000);
+    return () => clearTimeout(t);
+  }, [analysisRunning, analysisRunStartedAt, clearPoll]);
+
   const onRunAnalysis = useCallback(async () => {
     clearPoll();
+    setAnalysisTimedOut(false);
+    setAnalysisSlow(false);
     if (accounts.length === 0) {
       showToast("error", "Add an account before running analysis.");
       return;
@@ -149,6 +218,7 @@ export default function Dashboard() {
             setAnalysisRunning(false);
             setLiveJob(null);
             setAnalysisRunStartedAt(null);
+            setAnalysisSlow(false);
             emitAnalysisCompleted(jobId);
             showToast("success", "Analysis complete");
             void refetch();
@@ -157,6 +227,7 @@ export default function Dashboard() {
             setAnalysisRunning(false);
             setLiveJob(null);
             setAnalysisRunStartedAt(null);
+            setAnalysisSlow(false);
             const errMsg =
               typeof job.error_message === "string"
                 ? job.error_message
@@ -182,6 +253,7 @@ export default function Dashboard() {
       setAnalysisRunning(false);
       setLiveJob(null);
       setAnalysisRunStartedAt(null);
+      setAnalysisSlow(false);
       clearPoll();
       showToast(
         "error",
@@ -201,76 +273,117 @@ export default function Dashboard() {
         <title>{pageTitle(DASHBOARD_HEADING)}</title>
       </Head>
       <Layout>
-        <div className="mx-auto max-w-[1200px] px-6 py-10 lg:py-12">
-          <header className="mb-10 lg:mb-12">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary)]">
-              {DASHBOARD_HEADING}
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-[var(--text-primary)] sm:text-4xl">
-              {displayName ? `Welcome, ${displayName}` : "Overview"}
-            </h1>
-            <p className="mt-3 max-w-2xl text-sm leading-relaxed text-[var(--text-secondary)]">
-              Figures below are computed from accounts and positions returned by
-              your API. Empty sections mean no data was returned yet.
-            </p>
-          </header>
+        <div className="ds-page pb-[var(--space-12)] pt-[var(--space-2)]">
+          <AppPageHero
+            title="Dashboard"
+            subtitle={
+              displayName ? `${displayName} · ${DASHBOARD_HEADING}` : DASHBOARD_HEADING
+            }
+            kpi={
+              <DashboardHeroKpis
+                loading={loading}
+                totalValue={totalValue}
+                accountCount={accounts.length}
+                riskBadge={riskBadge}
+              />
+            }
+          />
 
           {error && !loading ? (
             <div
-              className="mb-8 rounded-xl border border-[color-mix(in_srgb,var(--danger)_45%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] px-4 py-3 text-sm text-[var(--danger)]"
+              className="mt-[var(--space-6)] rounded-[12px] border border-[color-mix(in_srgb,var(--danger)_45%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] p-[var(--space-4)] text-sm text-[var(--danger)]"
               role="alert"
             >
               {error}
             </div>
           ) : null}
 
-          <Hero
-            loading={loading}
-            accountCount={accounts.length}
-            totalPortfolioValue={totalValue}
-            assetClassBreakdown={assetClassBreakdown}
-            lastAnalysisLabel={lastAnalysisLabel}
-            analysisRunning={analysisRunning}
-            liveJob={liveJob}
-            recentFailedJob={recentFailedJob}
-            analyzeCapability={analyzeCapability}
-            mockLambdas={mockLambdas}
-            analysisRunStartedAt={analysisRunStartedAt}
-            onRunAnalysis={() => void onRunAnalysis()}
-          />
-
-          <div className="grid gap-8 lg:grid-cols-2 lg:gap-10">
-            <Insights
-              loading={loading}
-              job={latestCompletedJob}
-              failedJob={!latestCompletedJob ? recentFailedJob : null}
-            />
-            <PortfolioChart
-              loading={loading}
-              totalPositionsCount={totalPositionsCount}
-              assetClassBreakdown={assetClassBreakdown}
-              totalValue={totalValue}
-            />
+          <div className="ds-shell mt-[var(--space-6)]">
+            <div className="ds-grid-item min-w-0 ds-shell-span-12">
+              <AnalysisControlCard
+                recentFailedJob={recentFailedJob}
+                analysisRunning={analysisRunning}
+                liveJob={liveJob}
+                analyzeCapability={analyzeCapability}
+                mockLambdas={mockLambdas}
+                analysisRunStartedAt={analysisRunStartedAt}
+                analysisSlow={analysisSlow}
+                analysisTimedOut={analysisTimedOut}
+                onRunAnalysis={() => void onRunAnalysis()}
+              />
+            </div>
           </div>
 
-          <InstitutionalDashboardCharts
-            loading={loading}
-            jobs={jobs}
-            positionsByAccount={positionsByAccount}
-            instruments={instruments}
-            assetClassBreakdown={assetClassBreakdown}
-            totalValue={totalValue}
-            profile={profile as Record<string, unknown> | null}
-            latestCompletedJob={latestCompletedJob}
-          />
+          {loading ? (
+            <>
+              <div className="ds-shell mt-[var(--space-6)]">
+                <div className="ds-grid-item ds-shell-span-6 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
+                <div className="ds-grid-item ds-shell-span-6 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
+              </div>
+              <div className="ds-shell mt-[var(--space-6)]">
+                <div className="ds-grid-item ds-shell-span-4 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
+                <div className="ds-grid-item ds-shell-span-4 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
+                <div className="ds-grid-item ds-shell-span-4 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="ds-shell mt-[var(--space-6)]">
+                <div className="ds-grid-item min-w-0 ds-shell-span-6">
+                  <DashboardAllocationPanel model={chartModel} rt={rt} />
+                </div>
+                <div className="ds-grid-item min-w-0 ds-shell-span-6">
+                  <Insights
+                    loading={false}
+                    job={latestCompletedJob}
+                    failedJob={!latestCompletedJob ? recentFailedJob : null}
+                    analysisRunning={analysisRunning}
+                    analysisSlow={analysisSlow}
+                    liveJob={liveJob}
+                    analysisRunStartedAt={analysisRunStartedAt}
+                    fillCell
+                  />
+                </div>
+              </div>
 
-          <div className="mt-10">
-            <Accounts
-              loading={loading}
-              accounts={accounts}
-              positionsByAccount={positionsByAccount}
-            />
-          </div>
+              <div className="ds-shell mt-[var(--space-6)]">
+                <div className="ds-grid-item min-w-0 ds-shell-span-4">
+                  <AccountsSummaryCard
+                    loading={false}
+                    accounts={accounts}
+                    positionsByAccount={positionsByAccount}
+                    instruments={instruments}
+                  />
+                </div>
+                <div className="ds-grid-item min-w-0 ds-shell-span-4">
+                  <DashboardPerformanceCard
+                    model={chartModel}
+                    performanceDeltaPct={performanceDeltaPct}
+                    lastAnalysisLabel={lastAnalysisLabel}
+                    loading={false}
+                  />
+                </div>
+                <div className="ds-grid-item min-w-0 ds-shell-span-4">
+                  <DashboardActivityCard loading={false} jobs={jobs} />
+                </div>
+              </div>
+            </>
+          )}
+
+          {!loading ? (
+            <div className="mt-[var(--space-8)] min-w-0">
+              <p className="ds-caption">Full ledger</p>
+              <Accounts
+                loading={loading}
+                accounts={accounts}
+                positionsByAccount={positionsByAccount}
+                instruments={instruments}
+                dataFreshAt={dataFreshAt}
+                onSync={() => void refetch()}
+                cardClassName="mt-[var(--space-4)]"
+              />
+            </div>
+          ) : null}
         </div>
       </Layout>
     </>
