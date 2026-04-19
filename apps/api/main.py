@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
-import threading
 import time
 import traceback
 import uuid
@@ -104,17 +102,23 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     async def health_check_api_prefix(request: Request):
         """ALB / API Gateway / CloudFront liveness: no DB, no outbound HTTP (instant 200)."""
+        mig_ok = bool(getattr(request.app.state, "db_migrations_ok", False))
+        mig_type = getattr(request.app.state, "db_migrations_exception_type", None)
+        checks: dict[str, str] = {
+            "env": "ok",
+            "database": "not_checked",
+            "migrations": "ok" if mig_ok else "failed",
+        }
+        if not mig_ok and mig_type:
+            checks["migrations_exception_type"] = str(mig_type)
         return {
             **_health_payload(),
-            "checks": {
-                "env": "ok",
-                "database": "not_checked",
-            },
+            "checks": checks,
             "request_id": get_trace_id(request),
         }
 
-    _db_startup_lock = threading.Lock()
-    app.state.db_startup_complete = False
+    app.state.db_migrations_ok = False
+    app.state.db_migrations_exception_type: str | None = None
 
     def _run_db_startup() -> None:
         logger.info("Running database migrations (Postgres)")
@@ -122,6 +126,18 @@ def create_app() -> FastAPI:
         logger.info("Database migrations complete")
         warn_if_core_tables_missing(settings.supabase_database_url)
         log_startup_connectivity(settings)
+
+    try:
+        _run_db_startup()
+        app.state.db_migrations_ok = True
+        logger.info("db_migrations_at_boot: success")
+    except Exception as e:
+        app.state.db_migrations_ok = False
+        app.state.db_migrations_exception_type = type(e).__name__
+        logger.exception(
+            "db_migrations_at_boot: failed (%s) — API continues; fix Postgres/migrations for DB routes",
+            app.state.db_migrations_exception_type,
+        )
 
     app.add_middleware(
         CORSMiddleware,
@@ -182,46 +198,6 @@ def create_app() -> FastAPI:
                 )
             )
             raise
-
-    @app.middleware("http")
-    async def deferred_db_startup(request: Request, call_next):
-        # Normalize path so /api/health/ (trailing slash) does not skip DB init incorrectly.
-        p = (request.url.path or "/").rstrip("/") or "/"
-        m = request.method
-        skip = (
-            p in ("/health", "/api/health")
-            or (m == "GET" and p == "/api/user")
-            or (m == "GET" and p == "/api/capabilities")
-            or (m == "GET" and (p == "/api/debug" or p.startswith("/api/debug/")))
-        )
-        if skip:
-            return await call_next(request)
-
-        def _sync_once() -> None:
-            with _db_startup_lock:
-                if app.state.db_startup_complete:
-                    return
-                _run_db_startup()
-                app.state.db_startup_complete = True
-
-        try:
-            await asyncio.to_thread(_sync_once)
-        except Exception as e:
-            logger.exception(
-                "db_startup_middleware_failed request_id=%s",
-                getattr(request.state, "trace_id", None),
-            )
-            return JSONResponse(
-                status_code=503,
-                content=structured_error_json(
-                    request=request,
-                    message="Database initialization failed.",
-                    code="DB_STARTUP_FAILED",
-                    status_code=503,
-                    extra={"exception_type": type(e).__name__},
-                ),
-            )
-        return await call_next(request)
 
     @app.middleware("http")
     async def request_trace_id(request: Request, call_next):
