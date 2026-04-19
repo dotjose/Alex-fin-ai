@@ -1,0 +1,23 @@
+[project]
+name = "alex-finance-api"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "alex-database",
+    "alex-llm",
+    "boto3>=1.40.29",
+    "fastapi>=0.116.1",
+    "fastapi-clerk-auth>=0.0.7",
+    "httpx>=0.28.1",
+    "langfuse>=3.3.4",
+    "mangum>=0.19.0",
+    "pydantic-settings>=2.7.0",
+    "pydantic>=2.11.7",
+    "python-dotenv>=1.1.1",
+    "python-jose>=3.5.0",
+    "uvicorn>=0.35.0",
+]
+
+[tool.uv.sources]
+alex-database = { path = "../../backend/database", editable = true }
+alex-llm = { path = "../../backend/alex_llm", editable = true }

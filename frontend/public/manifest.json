@@ -1,0 +1,23 @@
+{
+  "name": "AlexFin.ai",
+  "short_name": "AlexFin.ai",
+  "description": "AI-powered financial intelligence for portfolio analysis and retirement planning",
+  "theme_color": "#4C82FB",
+  "background_color": "#F7F9FC",
+  "display": "standalone",
+  "scope": "/",
+  "start_url": "/dashboard",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.ico",
+      "sizes": "16x16 32x32 48x48",
+      "type": "image/x-icon"
+    }
+  ]
+}

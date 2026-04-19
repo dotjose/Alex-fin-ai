@@ -1,0 +1,28 @@
+version: 0.2
+
+env:
+  variables:
+    ECR_REPO_NAME: alex-researcher
+    AWS_DEFAULT_REGION: us-east-1
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - export ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO_NAME
+      - export IMAGE_TAG=build-$CODEBUILD_BUILD_NUMBER
+
+  build:
+    commands:
+      - echo Building Docker image...
+      - docker build --platform linux/amd64 -t $ECR_REPO_NAME:$IMAGE_TAG backend/researcher/
+      - docker tag $ECR_REPO_NAME:$IMAGE_TAG $ECR_URL:$IMAGE_TAG
+      - docker tag $ECR_REPO_NAME:$IMAGE_TAG $ECR_URL:latest
+
+  post_build:
+    commands:
+      - echo Pushing image to ECR...
+      - docker push $ECR_URL:$IMAGE_TAG
+      - docker push $ECR_URL:latest
+      - echo Build complete. Image pushed to $ECR_URL:latest
