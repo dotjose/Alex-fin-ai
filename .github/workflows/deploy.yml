@@ -139,7 +139,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
-          terraform_version: "1.10.6"
+          terraform_version: "1.9.x"
 
       - name: Terraform bootstrap (S3 remote state + native state locking)
         id: bootstrap
@@ -276,7 +276,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
-          terraform_version: "1.10.6"
+          terraform_version: "1.9.x"
 
       - name: Restore S3 backend config
         run: |
