@@ -1,10 +1,10 @@
-# Production deploy: static AWS keys → bootstrap state (S3 + DynamoDB) → main Terraform → ECR image → CORS → infra.json → Next → S3 sync → CloudFront invalidation.
+# Production deploy: static IAM user keys → bootstrap remote state (S3 + DynamoDB) → main Terraform
+# (phased) → ECR image → Lambda image + CORS → Next export → S3 → CloudFront invalidation.
 #
-# Rules:
-# - Static credentials only: AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (job env). No OIDC, no AWS_ROLE_ARN, no AWS_AUTH_MODE.
-# - No secrets.* in step/job "if:" conditions.
-# - Remote state bucket is created by terraform/bootstrap (no TF_STATE_* GitHub variables). Bucket name matches Terraform: alex-terraform-state-<account>-<regionSlug>.
-# - NEXT_PUBLIC_* for production: only from terraform outputs + NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY secret on the build step.
+# Auth: aws-actions/configure-aws-credentials with AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY only.
+# No OIDC, no AWS_ROLE_ARN, no role-to-assume, no id-token permissions.
+#
+# State: terraform/bootstrap creates the S3 backend bucket + lock table (no TF_STATE_BUCKET GitHub input).
 
 name: Deploy
 
@@ -18,6 +18,9 @@ on:
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  TF_VAR_node_env: production
 
 jobs:
   ci:
@@ -43,44 +46,57 @@ jobs:
         working-directory: frontend
         run: npm ci && npm run lint && npm run typecheck
 
-  deploy-production:
-    name: Deploy (main / manual)
+  terraform:
+    name: Terraform (bootstrap + phase 1)
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    environment: production
     permissions:
       contents: read
     env:
-      AWS_REGION: us-east-1
-      AWS_DEFAULT_REGION: us-east-1
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      TF_VAR_aws_region: us-east-1
-      TF_VAR_node_env: production
+      TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
       TF_VAR_supabase_url: ${{ vars.SUPABASE_URL }}
       TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       TF_VAR_supabase_database_url: ${{ secrets.SUPABASE_DATABASE_URL }}
       TF_VAR_openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
       TF_VAR_clerk_secret_key: ${{ secrets.CLERK_SECRET_KEY }}
       TF_VAR_clerk_jwt_issuer: ${{ vars.CLERK_JWT_ISSUER }}
+    outputs:
+      state_bucket: ${{ steps.bootstrap.outputs.state_bucket }}
+      lock_table: ${{ steps.bootstrap.outputs.lock_table }}
+      cloudfront_url: ${{ steps.tf_outputs.outputs.cloudfront_url }}
+      api_base_url: ${{ steps.tf_outputs.outputs.api_base_url }}
+      sqs_queue_url: ${{ steps.tf_outputs.outputs.sqs_queue_url }}
+      s3_bucket_name: ${{ steps.tf_outputs.outputs.s3_bucket_name }}
+      distribution_id: ${{ steps.tf_outputs.outputs.distribution_id }}
+      ecr_repository_url: ${{ steps.tf_outputs.outputs.ecr_repository_url }}
+      ecr_repository_name: ${{ steps.tf_outputs.outputs.ecr_repository_name }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Preflight (required secrets, variables, and AWS identity)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Preflight
         env:
           SUPABASE_URL_VAR: ${{ vars.SUPABASE_URL }}
           CLERK_ISSUER_VAR: ${{ vars.CLERK_JWT_ISSUER }}
         run: |
           set -euo pipefail
           if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
-            echo "::error::Set secrets AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+            echo "::error::Configure environment secrets AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
             exit 1
           fi
           if [ -z "${SUPABASE_URL_VAR:-}" ]; then
-            echo "::error::Set repository variable SUPABASE_URL (https://<ref>.supabase.co)"
+            echo "::error::Set repository variable SUPABASE_URL"
             exit 1
           fi
           if [ -z "${CLERK_ISSUER_VAR:-}" ]; then
-            echo "::error::Set repository variable CLERK_JWT_ISSUER (Clerk JWT issuer URL)"
+            echo "::error::Set repository variable CLERK_JWT_ISSUER"
             exit 1
           fi
           if [ -z "${TF_VAR_supabase_service_role_key:-}" ] || [ -z "${TF_VAR_supabase_database_url:-}" ] || [ -z "${TF_VAR_openrouter_api_key:-}" ]; then
@@ -89,6 +105,10 @@ jobs:
           fi
           if [ -z "${TF_VAR_clerk_secret_key:-}" ]; then
             echo "::error::Set secret CLERK_SECRET_KEY"
+            exit 1
+          fi
+          if [ -z "${AWS_REGION:-}" ]; then
+            echo "::error::Configure environment secret AWS_REGION (must match the region used by Terraform, e.g. us-east-1)"
             exit 1
           fi
           aws sts get-caller-identity --no-cli-pager
@@ -115,7 +135,8 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Terraform bootstrap (S3 remote state bucket + DynamoDB lock)
+      - name: Terraform bootstrap (S3 remote state + DynamoDB lock)
+        id: bootstrap
         run: |
           set -euo pipefail
           ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
@@ -142,8 +163,10 @@ jobs:
           done
           if [ "$ok" != true ]; then echo "::error::bootstrap terraform apply failed"; exit 1; fi
           aws s3 cp ./terraform.tfstate "s3://${STATE_BUCKET}/${META_KEY}"
+          echo "state_bucket=$(terraform output -raw state_bucket)" >> "$GITHUB_OUTPUT"
+          echo "lock_table=$(terraform output -raw lock_table)" >> "$GITHUB_OUTPUT"
 
-      - name: Write main stack S3 backend config (from bootstrap outputs)
+      - name: Write main stack S3 backend config
         run: |
           set -euo pipefail
           BUCKET="$(terraform -chdir="${GITHUB_WORKSPACE}/terraform/bootstrap" output -raw state_bucket)"
@@ -156,13 +179,12 @@ jobs:
           encrypt        = true
           EOF
 
-      - name: Cache Terraform plugins (main stack)
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: terraform/.terraform
           key: ${{ runner.os }}-terraform-main-${{ hashFiles('terraform/.terraform.lock.hcl') }}
 
-      - name: Terraform init (main stack)
+      - name: Terraform init (main)
         working-directory: terraform
         run: terraform init -input=false -backend-config=cideploy.backend.hcl
 
@@ -195,29 +217,87 @@ jobs:
           done
           exit 1
 
-      - name: Export ECR coordinates
-        id: ecr_meta
+      - name: Export Terraform outputs for downstream jobs
+        id: tf_outputs
         working-directory: terraform
         run: |
           set -euo pipefail
-          url="$(terraform output -raw ecr_repository_url)"
-          name="$(terraform output -raw ecr_repository_name)"
-          registry="${url%%/*}"
-          echo "repository_url=$url" >> "$GITHUB_OUTPUT"
-          echo "repository_name=$name" >> "$GITHUB_OUTPUT"
-          echo "registry=$registry" >> "$GITHUB_OUTPUT"
+          echo "cloudfront_url=$(terraform output -raw cloudfront_url)" >> "$GITHUB_OUTPUT"
+          echo "api_base_url=$(terraform output -raw api_base_url)" >> "$GITHUB_OUTPUT"
+          echo "sqs_queue_url=$(terraform output -raw sqs_queue_url)" >> "$GITHUB_OUTPUT"
+          echo "s3_bucket_name=$(terraform output -raw s3_bucket_name)" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_OUTPUT"
+          echo "ecr_repository_url=$(terraform output -raw ecr_repository_url)" >> "$GITHUB_OUTPUT"
+          echo "ecr_repository_name=$(terraform output -raw ecr_repository_name)" >> "$GITHUB_OUTPUT"
+
+  lambda_deploy:
+    name: Lambda (ECR + Terraform phases 1b + 2)
+    needs: [terraform]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    env:
+      TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
+      TF_VAR_supabase_url: ${{ vars.SUPABASE_URL }}
+      TF_VAR_supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      TF_VAR_supabase_database_url: ${{ secrets.SUPABASE_DATABASE_URL }}
+      TF_VAR_openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+      TF_VAR_clerk_secret_key: ${{ secrets.CLERK_SECRET_KEY }}
+      TF_VAR_clerk_jwt_issuer: ${{ vars.CLERK_JWT_ISSUER }}
+    outputs:
+      cloudfront_url: ${{ steps.final_outputs.outputs.cloudfront_url }}
+      api_base_url: ${{ steps.final_outputs.outputs.api_base_url }}
+      sqs_queue_url: ${{ steps.final_outputs.outputs.sqs_queue_url }}
+      s3_bucket_name: ${{ steps.final_outputs.outputs.s3_bucket_name }}
+      distribution_id: ${{ steps.final_outputs.outputs.distribution_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Restore S3 backend config
+        run: |
+          set -euo pipefail
+          cat > "${GITHUB_WORKSPACE}/terraform/cideploy.backend.hcl" <<EOF
+          bucket         = "${{ needs.terraform.outputs.state_bucket }}"
+          key            = "alex-financial-adviser/main/terraform.tfstate"
+          region         = "${{ secrets.AWS_REGION }}"
+          dynamodb_table = "${{ needs.terraform.outputs.lock_table }}"
+          encrypt        = true
+          EOF
+
+      - uses: actions/cache@v4
+        with:
+          path: terraform/.terraform
+          key: ${{ runner.os }}-terraform-main-${{ hashFiles('terraform/.terraform.lock.hcl') }}
+
+      - name: Terraform init (main)
+        working-directory: terraform
+        run: terraform init -input=false -backend-config=cideploy.backend.hcl
 
       - name: Login to Amazon ECR
         env:
-          REGISTRY: ${{ steps.ecr_meta.outputs.registry }}
+          REPO_URL: ${{ needs.terraform.outputs.ecr_repository_url }}
         run: |
           set -euo pipefail
+          REGISTRY="${REPO_URL%%/*}"
           aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REGISTRY}"
 
       - name: Build and push API image (digest-pinned)
         env:
-          REPO_URL: ${{ steps.ecr_meta.outputs.repository_url }}
-          REPO_NAME: ${{ steps.ecr_meta.outputs.repository_name }}
+          REPO_URL: ${{ needs.terraform.outputs.ecr_repository_url }}
+          REPO_NAME: ${{ needs.terraform.outputs.ecr_repository_name }}
           TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -272,22 +352,14 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve CloudFront URL for phase 2
-        id: public_urls
-        working-directory: terraform
-        run: |
-          set -euo pipefail
-          CF="$(terraform output -raw cloudfront_url)"
-          echo "cloudfront_url=$CF" >> "$GITHUB_OUTPUT"
-
       - name: Terraform plan (phase 2 — CORS + Lambda public URLs)
         working-directory: terraform
         env:
           TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
           TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_api_base_url: ${{ steps.public_urls.outputs.cloudfront_url }}
-          TF_VAR_frontend_url: ${{ steps.public_urls.outputs.cloudfront_url }}
-          TF_VAR_cors_allow_origin_primary: ${{ steps.public_urls.outputs.cloudfront_url }}
+          TF_VAR_api_base_url: ${{ needs.terraform.outputs.cloudfront_url }}
+          TF_VAR_frontend_url: ${{ needs.terraform.outputs.cloudfront_url }}
+          TF_VAR_cors_allow_origin_primary: ${{ needs.terraform.outputs.cloudfront_url }}
         run: terraform plan -out=tfplan2 -input=false
 
       - name: Terraform apply (phase 2, with retries)
@@ -295,9 +367,9 @@ jobs:
         env:
           TF_VAR_api_image_uri: ${{ env.IMAGE_URI }}
           TF_VAR_worker_image_uri: ${{ env.IMAGE_URI }}
-          TF_VAR_api_base_url: ${{ steps.public_urls.outputs.cloudfront_url }}
-          TF_VAR_frontend_url: ${{ steps.public_urls.outputs.cloudfront_url }}
-          TF_VAR_cors_allow_origin_primary: ${{ steps.public_urls.outputs.cloudfront_url }}
+          TF_VAR_api_base_url: ${{ needs.terraform.outputs.cloudfront_url }}
+          TF_VAR_frontend_url: ${{ needs.terraform.outputs.cloudfront_url }}
+          TF_VAR_cors_allow_origin_primary: ${{ needs.terraform.outputs.cloudfront_url }}
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
@@ -309,38 +381,44 @@ jobs:
           done
           exit 1
 
-      - name: Terraform output JSON
-        run: terraform -chdir=terraform output -json > "$GITHUB_WORKSPACE/infra.json"
-
-      - name: Export deploy env from Terraform outputs
-        id: infra
+      - name: Export final Terraform outputs
+        id: final_outputs
+        working-directory: terraform
         run: |
           set -euo pipefail
-          INFRA="$GITHUB_WORKSPACE/infra.json"
-          jq -e '.cloudfront_url.value' "$INFRA" >/dev/null
-          cloudfront_url="$(jq -r '.cloudfront_url.value' "$INFRA")"
-          api_url="$(jq -r '.api_base_url.value' "$INFRA")"
-          sqs_queue_url="$(jq -r '.sqs_queue_url.value' "$INFRA")"
-          s3_bucket_name="$(jq -r '.s3_bucket_name.value' "$INFRA")"
-          distribution_id="$(jq -r '.cloudfront_distribution_id.value' "$INFRA")"
-          if [ -z "$cloudfront_url" ] || [ "$cloudfront_url" = "null" ]; then echo "::error::cloudfront_url missing"; exit 1; fi
-          if [ -z "$api_url" ] || [ "$api_url" = "null" ]; then echo "::error::api_base_url missing"; exit 1; fi
-          if [ -z "$s3_bucket_name" ] || [ "$s3_bucket_name" = "null" ]; then echo "::error::s3_bucket_name missing"; exit 1; fi
-          if [ -z "$distribution_id" ] || [ "$distribution_id" = "null" ]; then echo "::error::cloudfront_distribution_id missing"; exit 1; fi
-          {
-            echo "cloudfront_url=$cloudfront_url"
-            echo "api_url=$api_url"
-            echo "sqs_queue_url=$sqs_queue_url"
-            echo "s3_bucket_name=$s3_bucket_name"
-            echo "distribution_id=$distribution_id"
-          } >> "$GITHUB_OUTPUT"
+          echo "cloudfront_url=$(terraform output -raw cloudfront_url)" >> "$GITHUB_OUTPUT"
+          echo "api_base_url=$(terraform output -raw api_base_url)" >> "$GITHUB_OUTPUT"
+          echo "sqs_queue_url=$(terraform output -raw sqs_queue_url)" >> "$GITHUB_OUTPUT"
+          echo "s3_bucket_name=$(terraform output -raw s3_bucket_name)" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_OUTPUT"
 
-      - name: Build frontend (production)
+  build_frontend:
+    name: Build frontend
+    needs: [lambda_deploy]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Write .env.production and build
         working-directory: frontend
         env:
-          NODE_ENV: production
-          NEXT_PUBLIC_API_URL: ${{ steps.infra.outputs.api_url }}
-          NEXT_PUBLIC_APP_URL: ${{ steps.infra.outputs.cloudfront_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
         run: |
           set -euo pipefail
@@ -348,16 +426,39 @@ jobs:
             echo "::error::Set secret NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"
             exit 1
           fi
+          CF_URL="${{ needs.lambda_deploy.outputs.cloudfront_url }}"
+          {
+            echo "NEXT_PUBLIC_API_URL=${CF_URL}"
+            echo "NEXT_PUBLIC_APP_URL=${CF_URL}"
+            echo "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}"
+          } > .env.production
+          npm ci
           npm run build
 
-      - name: Deploy frontend to S3
+      - name: Deploy static export to S3
         env:
-          S3_BUCKET_NAME: ${{ steps.infra.outputs.s3_bucket_name }}
-        run: aws s3 sync "$GITHUB_WORKSPACE/frontend/out/" "s3://${S3_BUCKET_NAME}/" --delete --region "${AWS_REGION}"
+          S3_BUCKET_NAME: ${{ needs.lambda_deploy.outputs.s3_bucket_name }}
+        run: aws s3 sync "${GITHUB_WORKSPACE}/frontend/out/" "s3://${S3_BUCKET_NAME}/" --delete --region "${AWS_REGION}"
 
-      - name: Invalidate CloudFront
+  invalidate_cloudfront:
+    name: Invalidate CloudFront
+    needs: [build_frontend, lambda_deploy]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Create CloudFront invalidation
         env:
-          DISTRIBUTION_ID: ${{ steps.infra.outputs.distribution_id }}
+          DISTRIBUTION_ID: ${{ needs.lambda_deploy.outputs.distribution_id }}
         run: |
           set -euo pipefail
           for i in 1 2 3; do
