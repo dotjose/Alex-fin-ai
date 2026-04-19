@@ -177,7 +177,7 @@ Before writing any code, check these common issues:
 
 **GitHub Actions / Docker build failures**
 - Check the **Deploy** workflow logs: image build runs in CI (not on a student laptop).
-- Typical causes: missing `AWS_ROLE_ARN` / ECR permissions, invalid `TF_VAR_*`, or Dockerfile context errors.
+- Typical causes: missing `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, missing `vars.SUPABASE_URL` or `vars.CLERK_JWT_ISSUER`, invalid `TF_VAR_*`, or Dockerfile context errors.
 
 **AWS Permissions Issues** (Most common overall)
 - Missing IAM policies for specific AWS services
@@ -349,11 +349,11 @@ The most common issues relate to AWS region choices! Check environment variables
 
 **Symptoms**: The **Deploy** workflow fails on “Build and push container image”, `terraform apply`, or frontend build.
 
-**Root Cause (common)**: Missing or incorrect GitHub **Secrets** / **Variables**, AWS OIDC role trust, or ECR repository name.
+**Root Cause (common)**: Missing or incorrect GitHub **Secrets** / **Variables**, IAM permissions for the access key, or Terraform/ECR errors.
 
 **Diagnosis**:
 1. Open the workflow run in GitHub → expand the failed step.
-2. Verify `AWS_ROLE_ARN` (or static key secrets), GitHub `vars.AWS_REGION`, and all `TF_VAR_*` inputs from `terraform/variables.tf`. ECR is created by Terraform (`ecr_repository_url` output); no `ECR_REPOSITORY` secret.
+2. Verify static key secrets, repository variables `SUPABASE_URL` and `CLERK_JWT_ISSUER`, and required secrets from `.github/workflows/deploy.yml`. ECR is created by Terraform (`ecr_repository_url` output).
 3. Confirm the AWS account has ECR, Lambda, API Gateway, S3, CloudFront permissions.
 
 **Solution**: Fix repository secrets/vars and re-run the workflow. There is no supported local zip or `deploy.py` path.

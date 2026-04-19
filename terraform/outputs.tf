@@ -35,8 +35,13 @@ output "s3_bucket_ui" {
   value       = module.frontend.bucket_id
 }
 
+output "s3_bucket_name" {
+  description = "UI bucket name (Next static export / aws s3 sync target)."
+  value       = module.frontend.bucket_id
+}
+
 output "ui_bucket_name" {
-  description = "Alias of s3_bucket_ui for CI scripts."
+  description = "Alias of s3_bucket_name for CI scripts."
   value       = module.frontend.bucket_id
 }
 

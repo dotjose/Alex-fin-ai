@@ -116,8 +116,8 @@ Type hints for the client live in **`frontend/lib/api.ts`**; **`frontend/lib/cap
 
 **All production releases go through GitHub Actions.** There are no supported zip bundles, ad-hoc shell deploy scripts, or “deploy from laptop” flows in this repo.
 
-1. Configure **repository secrets and variables** so they satisfy **`terraform/variables.tf`** and **`.github/workflows/deploy.yml`** (AWS OIDC role, ECR repository name, Supabase, OpenRouter, Langfuse, optional `OR_MODEL_EMBEDDING`, `CLERK_JWT_AUDIENCE`, `OPENAI_API_KEY`, etc.).
-2. Add **Clerk** secrets for CI: **`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`** (preferred) or **`CLERK_PUBLISHABLE_KEY`** — publishable key only; the workflow never passes **`CLERK_SECRET_KEY`** into the Next.js build. Optional **`CLERK_SECRET_KEY`** is passed to **Terraform/Lambda** only if you use Clerk server APIs from workers.
+1. Configure **repository secrets and variables** per **`.github/workflows/deploy.yml`**: static AWS keys (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), **`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`**, **`CLERK_SECRET_KEY`**, Supabase + OpenRouter secrets, and **variables** **`SUPABASE_URL`** and **`CLERK_JWT_ISSUER`**. Terraform creates the remote state bucket and ECR repo (no `TF_STATE_*` or `ECR_REPOSITORY`).
+2. **`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`** is the only Clerk key used in the Next.js build; **`CLERK_SECRET_KEY`** is passed to Lambda via Terraform for Clerk server APIs when needed.
 3. In the **Clerk dashboard**, allow your **CloudFront** URL (and `http://localhost:3000` for local dev) under authorized origins / redirect URLs so sign-in works after deploy.
 4. Push to **`main`** or run **Actions → Deploy → Run workflow**.
 

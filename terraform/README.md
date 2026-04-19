@@ -5,8 +5,8 @@
 There is **no** pre-created S3 bucket for Terraform state.
 
 1. **`terraform/bootstrap/`** — applies `modules/state_bootstrap` using **local** `terraform.tfstate` in that directory. It creates:
-   - S3 bucket: `alexfin-tfstate-<account_id>-<region_slug>` (region slug = AWS region with `-` removed, e.g. `useast1`)
-   - DynamoDB table: `alexfin-tflocks-<account_id>-<region_slug>`
+   - S3 bucket: `alex-terraform-state-<account_id>-<region_slug>` (region slug = AWS region with `-` removed, e.g. `useast1`)
+   - DynamoDB table: `alex-terraform-locks-<account_id>-<region_slug>`
 2. **GitHub Actions** copies that local state object to `s3://<state-bucket>/_meta/bootstrap/terraform.tfstate` after each bootstrap apply so the next run can **restore** it (bootstrap stays idempotent).
 3. **`terraform/` (main stack)** uses `backend "s3"` with partial config written at apply time as `cideploy.backend.hcl` (gitignored), pointing at the bucket and lock table from bootstrap outputs.
 
@@ -30,24 +30,26 @@ Local development against real AWS: copy `backend.example.hcl` to `backend.local
 
 ## GitHub (CI)
 
-**Repository variable (optional):** `AWS_REGION` — defaults to `us-east-1` in the workflow if unset.
+Deploy uses **static AWS access keys** in the workflow job environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`). Region is fixed to **`us-east-1`** in the workflow (change there if you use another region).
 
-**Optional:** `AWS_AUTH_MODE` (`oidc` default, or `keys`), `NEXT_PUBLIC_API_ORIGIN` (`cloudfront` default, or `apigateway`), OpenRouter model `vars.*`, `LANGFUSE_HOST`.
+**Repository variables (required):** `SUPABASE_URL`, `CLERK_JWT_ISSUER` (public values; passed as `TF_VAR_*`).
 
-**Not used:** `TF_STATE_BUCKET`, `TF_STATE_LOCK_TABLE`, `TF_STATE_KEY`, `ECR_REPOSITORY`.
+**Repository secrets (required):** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DATABASE_URL`, `OPENROUTER_API_KEY`.
 
-Secrets and `TF_VAR_*` wiring are documented in `.github/workflows/deploy.yml`.
+**Not used:** `TF_STATE_BUCKET`, `AWS_ROLE_ARN`, `ECR_REPOSITORY`, OIDC.
+
+Optional Lambda features (Polygon, Langfuse, OpenAI, Clerk JWT audience) use Terraform defaults unless you extend the workflow with more `TF_VAR_*` entries.
 
 ## Outputs → CI (`infra.json`)
 
-Stable keys include: `cloudfront_url`, `api_base_url`, `sqs_queue_url`, `s3_bucket_ui`, `ui_bucket_name`, `ecr_repository_url`, `ecr_repository_name`, `api_gateway_url`, `lambda_function_arns` (`api`, `planner_worker`, plus **expected** child agent ARNs).
+Stable keys include: `cloudfront_url`, `api_base_url`, `sqs_queue_url`, `s3_bucket_name`, `s3_bucket_ui`, `cloudfront_distribution_id`, `ecr_repository_url`, `ecr_repository_name`, `api_gateway_url`, `lambda_function_arns`.
 
-## IAM for the deploy role (OIDC or keys)
+## IAM for the deploy IAM user / key
 
-The role/user running CI needs at least:
+The principal whose access keys run CI needs at least:
 
-- **Bootstrap:** `s3:CreateBucket`, `s3:PutBucketVersioning`, `s3:PutEncryptionConfiguration`, `s3:PutBucketPublicAccessBlock`, `s3:GetObject`/`PutObject`/`DeleteObject`/`ListBucket` on `arn:aws:s3:::alexfin-tfstate-*` and objects (state + `_meta/bootstrap/*`).
-- **DynamoDB:** create/describe/update on lock tables matching `alexfin-tflocks-*`.
+- **Bootstrap:** `s3:CreateBucket`, `s3:PutBucketVersioning`, `s3:PutEncryptionConfiguration`, `s3:PutBucketPublicAccessBlock`, `s3:GetObject`/`PutObject`/`DeleteObject`/`ListBucket` on `arn:aws:s3:::alex-terraform-state-*` and objects (state + `_meta/bootstrap/*`).
+- **DynamoDB:** create/describe/update on lock tables matching `alex-terraform-locks-*`.
 - **Main stack:** standard permissions for Lambda, API Gateway v2, CloudFront, SQS, IAM, ECR, S3 (application buckets), etc.
 
 Tighten ARNs once the first bootstrap run has created the real bucket and table names.

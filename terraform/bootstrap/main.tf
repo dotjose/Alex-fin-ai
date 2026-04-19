@@ -1,5 +1,5 @@
 locals {
-  name_prefix = "alexfin"
+  name_prefix = "alex"
 }
 
 module "state" {

@@ -3,8 +3,8 @@ data "aws_region" "current" {}
 
 locals {
   region_slug       = replace(data.aws_region.current.name, "-", "")
-  state_bucket_name = "${var.name_prefix}-tfstate-${data.aws_caller_identity.current.account_id}-${local.region_slug}"
-  lock_table_name   = "${var.name_prefix}-tflocks-${data.aws_caller_identity.current.account_id}-${local.region_slug}"
+  state_bucket_name = "${var.name_prefix}-terraform-state-${data.aws_caller_identity.current.account_id}-${local.region_slug}"
+  lock_table_name   = "${var.name_prefix}-terraform-locks-${data.aws_caller_identity.current.account_id}-${local.region_slug}"
 }
 
 resource "aws_s3_bucket" "tf_state" {
