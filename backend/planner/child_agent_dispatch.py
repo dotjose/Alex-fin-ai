@@ -52,7 +52,11 @@ def _load_lambda_handler_module(pkg: str) -> Any:
     agent_dir = str(_BACKEND_ROOT / pkg)
     path = _BACKEND_ROOT / pkg / "lambda_handler.py"
     if not path.is_file():
-        raise FileNotFoundError(f"No lambda_handler at {path}")
+        raise FileNotFoundError(
+            f"No lambda_handler at {path}. "
+            "For the SQS worker image, COPY each agent tree to /var/task/<agent>/ "
+            "(see apps/api/Dockerfile.worker)."
+        )
     name = f"alex_local_dispatch_{pkg}"
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:

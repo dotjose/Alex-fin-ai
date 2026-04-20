@@ -10,7 +10,7 @@ function apiBaseUrl(): string {
 }
 
 // Type definitions
-/** Full profile row from `PUT /api/user` (and legacy GET). `GET /api/user` may return only `{ user_id }`. */
+/** Full profile row from `PUT /api/user` and `GET /api/user` (when a DB profile exists). */
 export interface User {
   clerk_user_id: string;
   display_name?: string | null;
@@ -116,10 +116,10 @@ export type { ApiCapabilities };
 export function createApiClient(token: string) {
   return {
     capabilities: () => fetchCapabilities(),
-    // User: GET returns `{ user_id }` (JWT only); PUT returns `{ user, created }`.
+    // User: GET returns `{ user_id, user? }`; PUT returns `{ user, created }`.
     user: {
       get: async () => {
-        const r = await apiRequest<{ user?: User; created?: boolean; user_id?: string }>(
+        const r = await apiRequest<{ user?: User | null; created?: boolean; user_id?: string }>(
           '/api/user',
           token
         );

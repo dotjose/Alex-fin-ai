@@ -16,6 +16,14 @@ RUN pip install --no-cache-dir /opt/alex/alex_llm
 
 COPY backend/planner /var/task/planner
 
+# Child agents loaded in-process by ``planner.child_agent_dispatch`` (paths under
+# ``/var/task/<agent>/lambda_handler.py``). Without these COPYs, local/fallback
+# execution raises FileNotFoundError: No lambda_handler at /var/task/reporter/...
+COPY backend/reporter /var/task/reporter
+COPY backend/tagger /var/task/tagger
+COPY backend/charter /var/task/charter
+COPY backend/retirement /var/task/retirement
+
 COPY apps/api /var/task/
 
 CMD ["workers.sqs_worker.handler"]

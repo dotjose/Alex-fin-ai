@@ -23,12 +23,15 @@ interface UserRow {
   region_targets?: { north_america?: number; international?: number };
 }
 
-type SettingsSnapshot = {
+/** Single source of truth for the settings form (payload mirrors this object). */
+type SettingsForm = {
   displayName: string;
-  targetRetirementIncome: number;
   yearsUntilRetirement: number;
-  equityTarget: number;
-  northAmericaTarget: number;
+  targetRetirementIncome: number;
+  equity: number;
+  fixedIncome: number;
+  northAmerica: number;
+  international: number;
 };
 
 function num(v: unknown, fallback: number): number {
@@ -53,19 +56,52 @@ function coercePairToLeft(a: unknown, b: unknown): number {
   return Math.max(0, Math.min(100, left));
 }
 
-function snapshotFromFields(
-  displayName: string,
-  targetRetirementIncome: number,
-  yearsUntilRetirement: number,
-  equityTarget: number,
-  northAmericaTarget: number
-): SettingsSnapshot {
+function clampPct(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function defaultForm(displayNameFallback: string): SettingsForm {
   return {
-    displayName: displayName.trim(),
-    targetRetirementIncome,
-    yearsUntilRetirement,
-    equityTarget,
-    northAmericaTarget,
+    displayName: displayNameFallback,
+    yearsUntilRetirement: 0,
+    targetRetirementIncome: 0,
+    equity: 50,
+    fixedIncome: 50,
+    northAmerica: 50,
+    international: 50,
+  };
+}
+
+function rowToForm(u: UserRow, displayNameFallback: string): SettingsForm {
+  const eq = coercePairToLeft(u.asset_class_targets?.equity, u.asset_class_targets?.fixed_income);
+  const na = coercePairToLeft(u.region_targets?.north_america, u.region_targets?.international);
+  return {
+    displayName: (u.display_name ?? displayNameFallback).trim() || displayNameFallback,
+    yearsUntilRetirement: num(u.years_until_retirement, 0),
+    targetRetirementIncome: num(u.target_retirement_income, 0),
+    equity: eq,
+    fixedIncome: 100 - eq,
+    northAmerica: na,
+    international: 100 - na,
+  };
+}
+
+function formToApiPayload(f: SettingsForm) {
+  const eq = clampPct(f.equity);
+  const na = clampPct(f.northAmerica);
+  return {
+    display_name: f.displayName.trim(),
+    years_until_retirement: f.yearsUntilRetirement,
+    target_retirement_income: f.targetRetirementIncome,
+    asset_class_targets: {
+      equity: eq,
+      fixed_income: 100 - eq,
+    },
+    region_targets: {
+      north_america: na,
+      international: 100 - na,
+    },
   };
 }
 
@@ -75,30 +111,13 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveFlash, setSaveFlash] = useState(false);
-  const [displayName, setDisplayName] = useState("");
-  const [yearsUntilRetirement, setYearsUntilRetirement] = useState(0);
-  const [targetRetirementIncome, setTargetRetirementIncome] = useState(0);
-  const [equityTarget, setEquityTarget] = useState(50);
-  const [northAmericaTarget, setNorthAmericaTarget] = useState(50);
-  const [baseline, setBaseline] = useState<SettingsSnapshot | null>(null);
-
-  const fixedIncomeTarget = 100 - equityTarget;
-  const internationalTarget = 100 - northAmericaTarget;
-
-  const currentSnapshot = useMemo(
-    () =>
-      snapshotFromFields(
-        displayName,
-        targetRetirementIncome,
-        yearsUntilRetirement,
-        equityTarget,
-        northAmericaTarget
-      ),
-    [displayName, targetRetirementIncome, yearsUntilRetirement, equityTarget, northAmericaTarget]
+  const [form, setForm] = useState<SettingsForm>(() =>
+    defaultForm("")
   );
+  const [baseline, setBaseline] = useState<SettingsForm | null>(null);
 
   const isDirty = Boolean(
-    baseline && JSON.stringify(currentSnapshot) !== JSON.stringify(baseline)
+    baseline && JSON.stringify(form) !== JSON.stringify(baseline)
   );
 
   const load = useCallback(async () => {
@@ -111,33 +130,20 @@ export default function SettingsPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error("Failed to load settings");
-      const body = await res.json();
+      const body = (await res.json()) as {
+        user_id?: string;
+        user?: UserRow | null;
+      };
+      const fallbackName =
+        user.fullName || user.primaryEmailAddress?.emailAddress?.split("@")[0] || "";
       if (body.user) {
-        const u = body.user as UserRow;
-        const dn = u.display_name ?? "";
-        const yrs = num(u.years_until_retirement, 0);
-        const tri = num(u.target_retirement_income, 0);
-        const eq = coercePairToLeft(u.asset_class_targets?.equity, u.asset_class_targets?.fixed_income);
-        const na = coercePairToLeft(u.region_targets?.north_america, u.region_targets?.international);
-        setDisplayName(dn);
-        setYearsUntilRetirement(yrs);
-        setTargetRetirementIncome(tri);
-        setEquityTarget(eq);
-        setNorthAmericaTarget(na);
-        setBaseline(snapshotFromFields(dn, tri, yrs, eq, na));
+        const next = rowToForm(body.user, fallbackName);
+        setForm(next);
+        setBaseline(next);
       } else if (body.user_id) {
-        const dn =
-          user.fullName || user.primaryEmailAddress?.emailAddress?.split("@")[0] || "";
-        const yrs = 0;
-        const tri = 0;
-        const eq = 50;
-        const na = 50;
-        setDisplayName(dn);
-        setYearsUntilRetirement(yrs);
-        setTargetRetirementIncome(tri);
-        setEquityTarget(eq);
-        setNorthAmericaTarget(na);
-        setBaseline(snapshotFromFields(dn, tri, yrs, eq, na));
+        const next = defaultForm(fallbackName);
+        setForm(next);
+        setBaseline(next);
       } else {
         throw new Error("Unexpected user response");
       }
@@ -152,15 +158,27 @@ export default function SettingsPage() {
     void load();
   }, [load]);
 
+  const setEquityPair = (value: number) => {
+    const v = clampPct(value);
+    setForm((prev) => ({ ...prev, equity: v, fixedIncome: 100 - v }));
+  };
+
+  const setRegionPair = (value: number) => {
+    const v = clampPct(value);
+    setForm((prev) => ({ ...prev, northAmerica: v, international: 100 - v }));
+  };
+
   const handleSave = async () => {
-    if (!displayName.trim()) {
+    if (!form.displayName.trim()) {
       showToast("error", "Display name is required");
       return;
     }
-    if (targetRetirementIncome < 0) {
+    if (form.targetRetirementIncome < 0) {
       showToast("error", "Target retirement income must be positive");
       return;
     }
+
+    const payload = formToApiPayload(form);
 
     setSaving(true);
     try {
@@ -172,35 +190,21 @@ export default function SettingsPage() {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          display_name: displayName.trim(),
-          years_until_retirement: yearsUntilRetirement,
-          target_retirement_income: targetRetirementIncome,
-          asset_class_targets: {
-            equity: equityTarget,
-            fixed_income: fixedIncomeTarget,
-          },
-          region_targets: {
-            north_america: northAmericaTarget,
-            international: internationalTarget,
-          },
-        }),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error("Save failed");
-      const saveBody = await res.json();
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => ({}))) as { detail?: string };
+        const detail =
+          typeof errBody.detail === "string" ? errBody.detail : `Save failed (${res.status})`;
+        throw new Error(detail);
+      }
+      const saveBody = (await res.json()) as { user?: UserRow };
       if (saveBody.user) {
-        const u = saveBody.user as UserRow;
-        const dn = u.display_name ?? "";
-        const yrs = num(u.years_until_retirement, 0);
-        const tri = num(u.target_retirement_income, 0);
-        const eq = coercePairToLeft(u.asset_class_targets?.equity, u.asset_class_targets?.fixed_income);
-        const na = coercePairToLeft(u.region_targets?.north_america, u.region_targets?.international);
-        setDisplayName(dn);
-        setYearsUntilRetirement(yrs);
-        setTargetRetirementIncome(tri);
-        setEquityTarget(eq);
-        setNorthAmericaTarget(na);
-        setBaseline(snapshotFromFields(dn, tri, yrs, eq, na));
+        const fallbackName =
+          user?.fullName || user?.primaryEmailAddress?.emailAddress?.split("@")[0] || "";
+        const next = rowToForm(saveBody.user, fallbackName);
+        setForm(next);
+        setBaseline(next);
       }
       showToast("success", "Settings saved");
       setSaveFlash(true);
@@ -212,7 +216,13 @@ export default function SettingsPage() {
     }
   };
 
-  const saveDisabled = saving || !displayName.trim() || !isDirty;
+  const saveDisabled = saving || !form.displayName.trim() || !isDirty;
+
+  const retirementInputValue = useMemo(
+    () =>
+      form.targetRetirementIncome ? form.targetRetirementIncome.toLocaleString("en-US") : "",
+    [form.targetRetirementIncome]
+  );
 
   return (
     <>
@@ -241,8 +251,8 @@ export default function SettingsPage() {
                       <DsTextInput
                         id="display_name"
                         type="text"
-                        value={displayName}
-                        onChange={(e) => setDisplayName(e.target.value)}
+                        value={form.displayName}
+                        onChange={(e) => setForm((p) => ({ ...p, displayName: e.target.value }))}
                         autoComplete="name"
                       />
                     </DsField>
@@ -262,15 +272,14 @@ export default function SettingsPage() {
                         id="target_retirement_income"
                         type="text"
                         inputMode="numeric"
-                        value={
-                          targetRetirementIncome
-                            ? targetRetirementIncome.toLocaleString("en-US")
-                            : ""
-                        }
+                        value={retirementInputValue}
                         onChange={(e) => {
                           const raw = e.target.value.replace(/,/g, "");
                           const n = parseInt(raw, 10);
-                          setTargetRetirementIncome(Number.isFinite(n) ? n : 0);
+                          setForm((p) => ({
+                            ...p,
+                            targetRetirementIncome: Number.isFinite(n) ? n : 0,
+                          }));
                         }}
                       />
                     </DsField>
@@ -279,7 +288,7 @@ export default function SettingsPage() {
                         Years until retirement
                       </span>
                       <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-2)]">
-                        <DsBadge variant="neutral">{yearsUntilRetirement} yrs</DsBadge>
+                        <DsBadge variant="neutral">{form.yearsUntilRetirement} yrs</DsBadge>
                         <span className="ds-body text-[var(--text-secondary)]">
                           Read-only from your profile.
                         </span>
@@ -299,14 +308,14 @@ export default function SettingsPage() {
                       id="equity_mix"
                       label="Equity vs fixed income"
                       layout="row"
-                      hint="Single source of truth: moving equity updates fixed income automatically."
+                      hint="Both values are saved on the server."
                     >
                       <DsDualPercentControl
                         id="equity_mix"
                         leftLabel="Equity"
                         rightLabel="Fixed income"
-                        leftPct={equityTarget}
-                        onLeftPctChange={setEquityTarget}
+                        leftPct={form.equity}
+                        onLeftPctChange={setEquityPair}
                       />
                     </DsField>
                   </section>
@@ -322,14 +331,14 @@ export default function SettingsPage() {
                       id="region_mix"
                       label="North America vs international"
                       layout="row"
-                      hint="Single source of truth: both controls stay in sync."
+                      hint="Both values are saved on the server."
                     >
                       <DsDualPercentControl
                         id="region_mix"
                         leftLabel="North America"
                         rightLabel="International"
-                        leftPct={northAmericaTarget}
-                        onLeftPctChange={setNorthAmericaTarget}
+                        leftPct={form.northAmerica}
+                        onLeftPctChange={setRegionPair}
                       />
                     </DsField>
                   </section>

@@ -3,6 +3,7 @@ Report Writer Agent Lambda Handler
 """
 
 import os
+import sys
 import json
 import asyncio
 import logging
@@ -16,6 +17,13 @@ try:
     load_dotenv(override=True)
 except ImportError:
     pass
+
+# Sibling imports (``judge``, ``templates``, ``agent``) resolve when this file is
+# loaded via importlib with ``/var/task/reporter`` on ``sys.path``, or when loaded
+# as ``reporter.lambda_handler`` (add this directory so local imports succeed).
+_REPORTER_DIR = os.path.dirname(os.path.abspath(__file__))
+if _REPORTER_DIR not in sys.path:
+    sys.path.insert(0, _REPORTER_DIR)
 
 # OpenRouter + Langfuse stack: disable OpenAI-hosted Agents trace export (expects OPENAI_API_KEY).
 os.environ.setdefault("OPENAI_AGENTS_DISABLE_TRACING", "true")
@@ -190,11 +198,13 @@ async def run_reporter_agent(
     return provider_unavailable_response()
 
 
-def lambda_handler(event, context=None):
+def lambda_handler(event, context):
     """
     Lambda handler expecting job_id, portfolio_data, and user_data in event.
 
-    Expected event:
+    Also supports SQS trigger shape: ``{"Records": [{"body": "<json>"}, ...]}``.
+
+    Expected direct event:
     {
         "job_id": "uuid",
         "portfolio_data": {...},
@@ -202,8 +212,51 @@ def lambda_handler(event, context=None):
     }
     """
     print("REPORTER_LAMBDA_TRIGGERED", flush=True)
+    logger.info(
+        json.dumps(
+            {
+                "event": "reporter_lambda_received",
+                "payload_type": type(event).__name__,
+                "has_records": bool(isinstance(event, dict) and event.get("Records")),
+            },
+            default=str,
+        )
+    )
     if isinstance(event, str):
         event = json.loads(event)
+
+    if isinstance(event, dict) and isinstance(event.get("Records"), list) and event["Records"]:
+        n = len(event["Records"])
+        logger.info(
+            json.dumps({"event": "reporter_sqs_batch", "record_count": n}, default=str)
+        )
+        last: Dict[str, Any] | None = None
+        for idx, record in enumerate(event["Records"]):
+            if not isinstance(record, dict):
+                logger.warning("reporter_sqs_skip_non_dict index=%s", idx)
+                continue
+            body = record.get("body", "{}")
+            try:
+                inner = json.loads(body) if isinstance(body, str) else (body or {})
+            except json.JSONDecodeError:
+                logger.exception("reporter_sqs_invalid_json index=%s", idx)
+                raise
+            logger.info(
+                json.dumps(
+                    {
+                        "event": "reporter_sqs_record",
+                        "index": idx,
+                        "message_id": record.get("messageId"),
+                        "job_id": inner.get("job_id") if isinstance(inner, dict) else None,
+                    },
+                    default=str,
+                )
+            )
+            last = lambda_handler(inner, context)
+        return last if last is not None else {
+            "statusCode": 200,
+            "body": json.dumps({"status": "processed", "records": 0}),
+        }
 
     step_name = (
         (event.get("step_name") or "reporter") if isinstance(event, dict) else "reporter"
