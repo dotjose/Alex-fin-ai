@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from core.auth import current_user_id_factory
 from core.config import Settings
 from core.route_errors import log_and_raise_http
+from services.onboarding import provision_user_session
 from services.portfolio_snapshot import build_account_portfolio_snapshot
 from services.supabase_client import get_database
 from src.schemas import AccountCreate
@@ -34,7 +35,7 @@ def build_router(settings: Settings) -> APIRouter:
     @router.get("/accounts")
     async def list_accounts(clerk_user_id: str = Depends(get_uid)):
         try:
-            rows = db.accounts.find_by_user(clerk_user_id)
+            _, rows, _ = provision_user_session(db, clerk_user_id)
             return jsonable_encoder(rows)
         except Exception as e:
             log_and_raise_http(logger, e, context="GET /api/accounts")
@@ -65,9 +66,7 @@ def build_router(settings: Settings) -> APIRouter:
         clerk_user_id: str = Depends(get_uid),
     ):
         try:
-            user = db.users.find_by_clerk_id(clerk_user_id)
-            if not user:
-                raise HTTPException(status_code=404, detail="User not found")
+            provision_user_session(db, clerk_user_id)
             account_id = db.accounts.create_account(
                 clerk_user_id=clerk_user_id,
                 account_name=account.account_name,

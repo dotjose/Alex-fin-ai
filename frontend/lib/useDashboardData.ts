@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getApiUrl } from "./config";
+import { requireApiUrl } from "./config";
 
 export type CreateAccountInput = {
   account_name: string;
@@ -113,6 +113,42 @@ function toNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** GET /api/user after onboarding provisioning (backend ≥ 2.0). */
+export type UserBootstrapResponse = {
+  user_id: string;
+  user?: Record<string, unknown> | null;
+  accounts?: unknown[];
+  bootstrap?: {
+    created_user?: boolean;
+    created_default_account?: boolean;
+  };
+};
+
+function normalizeApiAccount(raw: unknown): ApiAccount | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const id =
+    typeof o.id === "string"
+      ? o.id
+      : typeof o.account_id === "string"
+        ? o.account_id
+        : null;
+  if (!id) return null;
+  const account_name =
+    typeof o.account_name === "string"
+      ? o.account_name
+      : typeof o.name === "string"
+        ? o.name
+        : "Account";
+  return {
+    id,
+    account_name,
+    account_purpose: typeof o.account_purpose === "string" ? o.account_purpose : undefined,
+    cash_balance: toNumber(o.cash_balance),
+    clerk_user_id: typeof o.clerk_user_id === "string" ? o.clerk_user_id : undefined,
+  };
+}
+
 export function useDashboardData(
   enabled: boolean,
   getToken: () => Promise<string | null>
@@ -131,52 +167,70 @@ export function useDashboardData(
   >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
 
   useEffect(() => {
     if (!enabled) {
       setLoading(false);
       setError(null);
+      setSessionReady(false);
     }
   }, [enabled]);
 
   const load = useCallback(async () => {
     if (!enabled) {
       setLoading(false);
+      setSessionReady(false);
       return;
     }
     setLoading(true);
     setError(null);
+    setSessionReady(false);
     try {
       const token = await getToken();
       if (!token) {
         setError("Not authenticated");
         return;
       }
+      const base = requireApiUrl();
       const headers = { Authorization: `Bearer ${token}` };
 
-      const userRes = await fetch(`${getApiUrl()}/api/user`, { headers });
+      const userRes = await fetch(`${base}/api/user`, { headers });
       if (!userRes.ok) {
         throw new Error(`Failed to load profile (${userRes.status})`);
       }
-      const userJson = (await userRes.json()) as {
-        user?: Record<string, unknown>;
-        user_id?: string;
-      };
-      if (userJson.user) setUser(userJson.user);
-      else if (userJson.user_id)
+      const userJson = (await userRes.json()) as UserBootstrapResponse;
+      if (userJson.user && typeof userJson.user === "object") {
+        setUser(userJson.user as Record<string, unknown>);
+      } else if (userJson.user_id) {
         setUser({ clerk_user_id: userJson.user_id });
-      else setUser(null);
-
-      const accountsRes = await fetch(`${getApiUrl()}/api/accounts`, { headers });
-      if (!accountsRes.ok) {
-        throw new Error(`Failed to load accounts (${accountsRes.status})`);
+      } else {
+        setUser(null);
       }
-      const accountsData: ApiAccount[] = await accountsRes.json();
-      const list = Array.isArray(accountsData) ? accountsData : [];
+
+      const list: ApiAccount[] = [];
+      if (Array.isArray(userJson.accounts) && userJson.accounts.length > 0) {
+        for (const row of userJson.accounts) {
+          const n = normalizeApiAccount(row);
+          if (n) list.push(n);
+        }
+      }
+      if (list.length === 0) {
+        const accountsRes = await fetch(`${base}/api/accounts`, { headers });
+        if (!accountsRes.ok) {
+          throw new Error(`Failed to load accounts (${accountsRes.status})`);
+        }
+        const accountsData = (await accountsRes.json()) as unknown;
+        const arr = Array.isArray(accountsData) ? accountsData : [];
+        for (const row of arr) {
+          const n = normalizeApiAccount(row);
+          if (n) list.push(n);
+        }
+      }
       setAccounts(list);
 
       const instMap: Record<string, ApiInstrument> = {};
-      const instRes = await fetch(`${getApiUrl()}/api/instruments`, { headers });
+      const instRes = await fetch(`${base}/api/instruments`, { headers });
       if (instRes.ok) {
         const instRows = (await instRes.json()) as unknown;
         if (Array.isArray(instRows)) {
@@ -193,7 +247,7 @@ export function useDashboardData(
       await Promise.all(
         list.map(async (acc) => {
           if (!acc.id) return;
-          const pr = await fetch(`${getApiUrl()}/api/accounts/${acc.id}/portfolio`, {
+          const pr = await fetch(`${base}/api/accounts/${acc.id}/portfolio`, {
             headers,
           });
           if (!pr.ok) {
@@ -220,15 +274,17 @@ export function useDashboardData(
       setPortfolioByAccount(snapMap);
       setPositionsByAccount(posMap);
 
-      const jobsRes = await fetch(`${getApiUrl()}/api/jobs`, { headers });
+      const jobsRes = await fetch(`${base}/api/jobs`, { headers });
       if (jobsRes.ok) {
         const jobsJson = await jobsRes.json();
         setJobs(jobsJson.jobs || []);
       } else {
         setJobs([]);
       }
+      setSessionReady(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load dashboard");
+      setSessionReady(false);
     } finally {
       setLoading(false);
     }
@@ -343,7 +399,7 @@ export function useDashboardData(
       const token = await getToken();
       if (!token) return;
       const headers = { Authorization: `Bearer ${token}` };
-      const pr = await fetch(`${getApiUrl()}/api/accounts/${accountId}/portfolio`, {
+      const pr = await fetch(`${requireApiUrl()}/api/accounts/${accountId}/portfolio`, {
         headers,
       });
       if (!pr.ok) return;
@@ -375,7 +431,7 @@ export function useDashboardData(
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
       try {
-        const res = await fetch(`${getApiUrl()}/api/positions/${positionId}`, {
+        const res = await fetch(`${requireApiUrl()}/api/positions/${positionId}`, {
           method: "PUT",
           headers: {
             Authorization: `Bearer ${token}`,
@@ -412,7 +468,7 @@ export function useDashboardData(
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
       try {
-        const res = await fetch(`${getApiUrl()}/api/positions/${positionId}`, {
+        const res = await fetch(`${requireApiUrl()}/api/positions/${positionId}`, {
           method: "DELETE",
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -443,7 +499,7 @@ export function useDashboardData(
       if (!enabled) return;
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
-      const res = await fetch(`${getApiUrl()}/api/positions`, {
+      const res = await fetch(`${requireApiUrl()}/api/positions`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -483,7 +539,7 @@ export function useDashboardData(
       if (!enabled) return;
       const token = await getToken();
       if (!token) throw new Error("Not authenticated");
-      const res = await fetch(`${getApiUrl()}/api/accounts`, {
+      const res = await fetch(`${requireApiUrl()}/api/accounts`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -532,6 +588,7 @@ export function useDashboardData(
     mostRecentJob,
     lastAnalysisLabel,
     loading,
+    sessionReady,
     error,
     refetch: load,
     totalPositionsCount,

@@ -19,3 +19,14 @@ export function getApiUrl(): string {
   }
   return "http://localhost:8000";
 }
+
+/** Use before authenticated API calls; fails fast with a clear configuration error. */
+export function requireApiUrl(): string {
+  const base = getApiUrl().trim();
+  if (!base) {
+    throw new Error(
+      "API base URL is empty. Set NEXT_PUBLIC_API_URL to your FastAPI origin (e.g. https://api.example.com).",
+    );
+  }
+  return base;
+}

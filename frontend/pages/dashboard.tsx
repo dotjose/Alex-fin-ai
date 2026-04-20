@@ -15,7 +15,7 @@ import { SecondaryStrip } from "@/components/dashboard/v2/SecondaryStrip";
 import { portfolioValueTimeline } from "@/lib/dashboardChartData";
 import { useDashboardChartModel } from "@/lib/useDashboardChartModel";
 import { useRechartsTheme } from "@/lib/useRechartsTheme";
-import { getApiUrl } from "../lib/config";
+import { requireApiUrl } from "../lib/config";
 import {
   emitAnalysisCompleted,
   emitAnalysisFailed,
@@ -43,6 +43,7 @@ export default function Dashboard() {
     latestCompletedJob,
     mostRecentJob,
     loading,
+    sessionReady,
     error,
     refetch,
     totalPositionsCount,
@@ -168,7 +169,7 @@ export default function Dashboard() {
       setAnalysisRunning(true);
       setLiveJob(null);
       setAnalysisRunStartedAt(null);
-      const res = await fetch(`${getApiUrl()}/api/analyze`, {
+      const res = await fetch(`${requireApiUrl()}/api/analyze`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -195,7 +196,7 @@ export default function Dashboard() {
             setAnalysisRunStartedAt(null);
             return;
           }
-          const jr = await fetch(`${getApiUrl()}/api/jobs/${jobId}`, {
+          const jr = await fetch(`${requireApiUrl()}/api/jobs/${jobId}`, {
             headers: {
               Authorization: `Bearer ${t}`,
               "Cache-Control": "no-cache",
@@ -281,6 +282,8 @@ export default function Dashboard() {
     [deletePosition],
   );
 
+  const dashBusy = loading || !sessionReady;
+
   const analyzeDisabled = analyzeCapability === false;
   const analyzeDisabledReason =
     analyzeCapability === false
@@ -301,12 +304,18 @@ export default function Dashboard() {
             totalValue={totalValue}
             dailyChangePct={performanceDeltaPct}
             portfolioScore={totalValue > 0 ? derivedRiskScore : null}
-            loading={loading}
+            loading={dashBusy}
           />
 
           <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">
             {displayName ? `${displayName} · ${DASHBOARD_HEADING}` : DASHBOARD_HEADING}
           </p>
+
+          {dashBusy && !error ? (
+            <p className="mt-4 text-sm text-gray-600 dark:text-gray-400" aria-live="polite">
+              Initializing your workspace…
+            </p>
+          ) : null}
 
           {error && !loading ? (
             <div
@@ -317,7 +326,7 @@ export default function Dashboard() {
             </div>
           ) : null}
 
-          {recentFailedJob && !loading ? (
+          {recentFailedJob && !dashBusy ? (
             <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-900/40 dark:bg-amber-950/25 dark:text-amber-100">
               Last run failed
               {typeof recentFailedJob.error_message === "string"
@@ -335,8 +344,14 @@ export default function Dashboard() {
               onAddPosition={() => setSignalAddPosition((n) => n + 1)}
               onAddAccount={() => setSignalAddAccount((n) => n + 1)}
               analysisRunning={analysisRunning}
-              analyzeDisabled={analyzeDisabled || analyzeCapability === null}
-              analyzeDisabledReason={analyzeDisabledReason}
+              analyzeDisabled={
+                analyzeDisabled || analyzeCapability === null || dashBusy
+              }
+              analyzeDisabledReason={
+                dashBusy
+                  ? "Loading your workspace…"
+                  : analyzeDisabledReason
+              }
             />
           </div>
 
@@ -352,7 +367,7 @@ export default function Dashboard() {
           <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-10">
             <div className="min-w-0 space-y-6 lg:col-span-7">
               <HoldingsTable
-                loading={loading}
+                loading={dashBusy}
                 accounts={accounts}
                 portfolioByAccount={portfolioByAccount}
                 instruments={instruments}
@@ -360,28 +375,28 @@ export default function Dashboard() {
                 onQuantityCommit={onQuantityCommit}
                 onDelete={(accountId, positionId) => onDeletePosition(accountId, positionId)}
               />
-              <PerformanceChart data={perfSeries} rt={rt} loading={loading} />
+              <PerformanceChart data={perfSeries} rt={rt} loading={dashBusy} />
             </div>
 
             <div className="min-w-0 space-y-6 lg:col-span-3">
               <InsightCard
-                loading={loading}
+                loading={dashBusy}
                 job={latestCompletedJob}
                 accounts={accounts}
                 portfolioByAccount={portfolioByAccount}
               />
-              <AllocationChart model={chartModel} rt={rt} loading={loading} />
+              <AllocationChart model={chartModel} rt={rt} loading={dashBusy} />
               <RiskSummaryCard
                 riskScore={totalValue > 0 ? derivedRiskScore : null}
                 riskBadge={riskBadge}
-                loading={loading}
+                loading={dashBusy}
               />
             </div>
           </div>
 
           <div className="mt-8">
             <SecondaryStrip
-              loading={loading}
+              loading={dashBusy}
               accounts={accounts}
               portfolioByAccount={portfolioByAccount}
               positionsByAccount={positionsByAccount}
@@ -391,7 +406,7 @@ export default function Dashboard() {
 
           <PortfolioHoldingsLedger
             modalsOnly
-            loading={loading}
+            loading={dashBusy}
             accounts={accounts}
             portfolioByAccount={portfolioByAccount}
             positionsByAccount={positionsByAccount}

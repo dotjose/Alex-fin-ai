@@ -18,6 +18,7 @@ from core.auth import current_user_id_factory
 from core.config import Settings
 from core.route_errors import log_and_raise_http
 from services.aws import credential_source_hint, get_sqs_client, log_sqs_url_vs_credentials
+from services.onboarding import provision_user_session
 from services.supabase_client import get_database
 
 from alex_llm.lambda_observability import verbose_observability_enabled
@@ -158,9 +159,7 @@ def build_router(settings: Settings) -> APIRouter:
                     "(in-process planner only)"
                 )
 
-            user = db.users.find_by_clerk_id(clerk_user_id)
-            if not user:
-                raise HTTPException(status_code=404, detail="User not found")
+            provision_user_session(db, clerk_user_id)
 
             job_id = db.jobs.create_job(
                 clerk_user_id=clerk_user_id,

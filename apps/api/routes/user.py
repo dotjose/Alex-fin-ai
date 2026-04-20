@@ -7,24 +7,32 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.auth import HTTPAuthorizationCredentials, clerk_bearer, current_user_id_factory
 from core.config import Settings
 from core.route_errors import log_and_raise_http
+from services.onboarding import provision_user_session
 from services.supabase_client import get_database
 
 logger = logging.getLogger(__name__)
 
 
+class BootstrapFlags(BaseModel):
+    created_user: bool = False
+    created_default_account: bool = False
+
+
 class UserGetResponse(BaseModel):
     """
-    GET /api/user — always includes ``user_id`` from JWT; ``user`` is the full
-    Supabase row when a profile exists, else ``None``.
+    GET /api/user — JWT ``user_id``, persisted profile, and **always** at least one account
+    after provisioning (idempotent).
     """
 
     user_id: str
     user: Optional[Dict[str, Any]] = None
+    accounts: list[Dict[str, Any]] = Field(default_factory=list)
+    bootstrap: BootstrapFlags = Field(default_factory=BootstrapFlags)
 
 
 class UserResponse(BaseModel):
@@ -59,7 +67,7 @@ def build_router(settings: Settings) -> APIRouter:
 
     @router.get("/user", response_model=UserGetResponse)
     async def get_user_identity(creds: HTTPAuthorizationCredentials = Depends(guard)):
-        """Return JWT ``user_id`` plus full profile row from DB when it exists."""
+        """Provision user + default account on first JWT, then return full session snapshot."""
         try:
             decoded = creds.decoded or {}
             user_id = str(decoded.get("sub", "")).strip()
@@ -79,10 +87,15 @@ def build_router(settings: Settings) -> APIRouter:
                 expected_issuer,
                 expected_audience,
             )
-            row = db.users.find_by_clerk_id(user_id)
+            user_row, accounts, flags = provision_user_session(db, user_id)
             return UserGetResponse(
                 user_id=user_id,
-                user=jsonable_encoder(row) if row else None,
+                user=jsonable_encoder(user_row),
+                accounts=jsonable_encoder(accounts),
+                bootstrap=BootstrapFlags(
+                    created_user=bool(flags.get("created_user")),
+                    created_default_account=bool(flags.get("created_default_account")),
+                ),
             )
         except HTTPException:
             raise
@@ -95,9 +108,9 @@ def build_router(settings: Settings) -> APIRouter:
         clerk_user_id: str = Depends(get_uid),
     ):
         try:
-            user = db.users.find_by_clerk_id(clerk_user_id)
+            user, _, _ = provision_user_session(db, clerk_user_id)
             if not user:
-                raise HTTPException(status_code=404, detail="User not found")
+                raise HTTPException(status_code=500, detail="User provisioning failed")
             update_data = user_update.model_dump(exclude_unset=True, exclude_none=True)
             if "asset_class_targets" in update_data:
                 merged = _merge_mapping(
@@ -120,7 +133,7 @@ def build_router(settings: Settings) -> APIRouter:
             db.users.update_by_clerk_id(clerk_user_id, update_data)
             updated = db.users.find_by_clerk_id(clerk_user_id)
             if not updated:
-                raise HTTPException(status_code=404, detail="User not found")
+                raise HTTPException(status_code=500, detail="User update could not be reloaded")
             logger.info(
                 "api_user_put_ok clerk_user_id=%s has_asset=%s has_region=%s",
                 clerk_user_id,

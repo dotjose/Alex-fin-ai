@@ -132,10 +132,13 @@ export function createApiClient(token: string) {
     // User: GET returns `{ user_id, user? }`; PUT returns `{ user, created }`.
     user: {
       get: async () => {
-        const r = await apiRequest<{ user?: User | null; created?: boolean; user_id?: string }>(
-          '/api/user',
-          token
-        );
+        const r = await apiRequest<{
+          user?: User | null;
+          created?: boolean;
+          user_id?: string;
+          accounts?: Account[];
+          bootstrap?: { created_user?: boolean; created_default_account?: boolean };
+        }>('/api/user', token);
         if (r.user) return r.user;
         if (r.user_id) return { clerk_user_id: r.user_id } as User;
         throw new Error('Invalid user response');
