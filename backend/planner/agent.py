@@ -25,6 +25,34 @@ from child_agent_dispatch import run_child_lambda_handler_locally
 
 logger = logging.getLogger()
 
+# Fallback charts when charter is skipped or fails (matches charter.chart_contract.empty_charts_payload).
+_EMPTY_CHARTS_PAYLOAD: Dict[str, Any] = {
+    "allocation": {"type": "donut", "title": "Allocation", "data": []},
+    "performance": {"type": "line", "title": "Performance", "data": []},
+}
+
+
+def _persist_empty_charts(db: Any, job_id: str) -> None:
+    try:
+        db.jobs.update_charts(str(job_id), dict(_EMPTY_CHARTS_PAYLOAD))
+    except Exception:
+        logger.exception("planner: could not persist empty charts job_id=%s", job_id)
+
+
+def _persist_empty_retirement(db: Any, job_id: str) -> None:
+    try:
+        db.jobs.update_retirement(
+            str(job_id),
+            {
+                "analysis": "Retirement projections were not generated for this run.",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "agent": "retirement",
+                "degraded": True,
+            },
+        )
+    except Exception:
+        logger.exception("planner: could not persist empty retirement job_id=%s", job_id)
+
 
 def _orchestration_soft_llm_result(result: Any) -> bool:
     """Child returned a controlled LLM failure; planner should continue downstream steps."""
@@ -645,7 +673,34 @@ def load_portfolio_summary(job_id: str, db) -> Dict[str, Any]:
         user_id = job["clerk_user_id"]
         user = db.users.find_by_clerk_id(user_id)
         if not user:
-            raise ValueError(f"User {user_id} not found")
+            try:
+                db.users.create_user(user_id)
+                user = db.users.find_by_clerk_id(user_id)
+            except Exception:
+                logger.exception("planner: could not auto-create user job_id=%s", job_id)
+        if not user:
+            logger.warning(
+                "planner: user row missing after bootstrap clerk_user_id=%s — using defaults",
+                user_id,
+            )
+            accounts = db.accounts.find_by_user(user_id)
+            npos = 0
+            tv = 0.0
+            for account in accounts:
+                cash = float(account.get("cash_balance", 0) or 0)
+                tv += cash
+                for p in db.positions.find_by_account(account["id"]):
+                    npos += 1
+                    inst = db.instruments.find_by_symbol(p["symbol"])
+                    if inst and inst.get("current_price"):
+                        tv += float(inst["current_price"]) * float(p["quantity"])
+            return {
+                "total_value": tv,
+                "num_accounts": len(accounts),
+                "num_positions": npos,
+                "years_until_retirement": 30,
+                "target_retirement_income": 80000.0,
+            }
 
         accounts = db.accounts.find_by_user(user_id)
 
@@ -742,51 +797,123 @@ async def invoke_reporter_internal(ctx: PlannerContext) -> str:
 
 
 async def invoke_charter_internal(ctx: PlannerContext) -> str:
+    """Optional agent: never fails the planner; persists empty charts on any error."""
     job = ctx.db.jobs.find_by_id(ctx.job_id)
     uid = (job or {}).get("clerk_user_id")
     logger.info("Planner: calling Charter (job_id=%s function=%s)", ctx.job_id, CHARTER_FUNCTION)
-    result = await invoke_agent(
-        "charter",
-        {"job_id": ctx.job_id, "clerk_user_id": uid},
-        pipeline_agent="charter",
-        db=ctx.db,
-        job_id=ctx.job_id,
-    )
+    try:
+        result = await invoke_agent(
+            "charter",
+            {"job_id": ctx.job_id, "clerk_user_id": uid},
+            pipeline_agent="charter",
+            db=ctx.db,
+            job_id=ctx.job_id,
+        )
+    except Exception as e:
+        logger.exception("Planner: charter invoke raised job_id=%s", ctx.job_id)
+        _persist_empty_charts(ctx.db, ctx.job_id)
+        orch_step(
+            ctx.db,
+            ctx.job_id,
+            "charter",
+            "completed",
+            detail="optional_degraded",
+            error=str(e)[:500],
+        )
+        return "Charter skipped after error; empty charts stored."
+
     if _orchestration_soft_llm_result(result):
         logger.warning(
             "Planner: charter LLM degraded job_id=%s err=%s — continuing",
             ctx.job_id,
             result.get("error"),
         )
-        return "Charter step skipped (LLM unavailable); retirement will still run."
-    fail = _lambda_invocation_failure_detail(result) or result.get("error")
-    if fail:
-        raise RuntimeError(f"Charter failed: {fail}")
-    return "Charter agent completed successfully. Portfolio visualizations have been created and saved."
+        _persist_empty_charts(ctx.db, ctx.job_id)
+        orch_step(
+            ctx.db,
+            ctx.job_id,
+            "charter",
+            "completed",
+            detail="llm_degraded",
+            error=str(result.get("error", ""))[:200],
+        )
+        return "Charter step skipped (LLM unavailable); empty charts stored."
+
+    if not isinstance(result, dict) or result.get("success") is not True:
+        fail = _lambda_invocation_failure_detail(result) or result.get("error") or "charter_unsuccessful"
+        logger.error("Planner: charter non-success job_id=%s detail=%s", ctx.job_id, fail)
+        _persist_empty_charts(ctx.db, ctx.job_id)
+        orch_step(
+            ctx.db,
+            ctx.job_id,
+            "charter",
+            "completed",
+            detail="optional_degraded",
+            error=str(fail)[:500],
+        )
+        return "Charter completed with empty charts (non-fatal)."
+
+    return "Charter agent finished (success)."
 
 
 async def invoke_retirement_internal(ctx: PlannerContext) -> str:
+    """Optional agent: never fails the planner."""
     job = ctx.db.jobs.find_by_id(ctx.job_id)
     uid = (job or {}).get("clerk_user_id")
     logger.info("Planner: calling Retirement (job_id=%s function=%s)", ctx.job_id, RETIREMENT_FUNCTION)
-    result = await invoke_agent(
-        "retirement",
-        {"job_id": ctx.job_id, "clerk_user_id": uid},
-        pipeline_agent="retirement",
-        db=ctx.db,
-        job_id=ctx.job_id,
-    )
+    try:
+        result = await invoke_agent(
+            "retirement",
+            {"job_id": ctx.job_id, "clerk_user_id": uid},
+            pipeline_agent="retirement",
+            db=ctx.db,
+            job_id=ctx.job_id,
+        )
+    except Exception as e:
+        logger.exception("Planner: retirement invoke raised job_id=%s", ctx.job_id)
+        _persist_empty_retirement(ctx.db, ctx.job_id)
+        orch_step(
+            ctx.db,
+            ctx.job_id,
+            "retirement",
+            "completed",
+            detail="optional_degraded",
+            error=str(e)[:500],
+        )
+        return "Retirement skipped after error; placeholder saved."
+
     if _orchestration_soft_llm_result(result):
         logger.warning(
             "Planner: retirement LLM degraded job_id=%s err=%s — finishing pipeline",
             ctx.job_id,
             result.get("error"),
         )
-        return "Retirement step skipped (LLM unavailable); job will complete with partial results."
-    fail = _lambda_invocation_failure_detail(result) or result.get("error")
-    if fail:
-        raise RuntimeError(f"Retirement failed: {fail}")
-    return "Retirement agent completed successfully. Retirement projections have been calculated and saved."
+        _persist_empty_retirement(ctx.db, ctx.job_id)
+        orch_step(
+            ctx.db,
+            ctx.job_id,
+            "retirement",
+            "completed",
+            detail="llm_degraded",
+            error=str(result.get("error", ""))[:200],
+        )
+        return "Retirement step skipped (LLM unavailable); placeholder saved."
+
+    if not isinstance(result, dict) or result.get("success") is not True:
+        fail = _lambda_invocation_failure_detail(result) or result.get("error") or "retirement_unsuccessful"
+        logger.error("Planner: retirement non-success job_id=%s detail=%s", ctx.job_id, fail)
+        _persist_empty_retirement(ctx.db, ctx.job_id)
+        orch_step(
+            ctx.db,
+            ctx.job_id,
+            "retirement",
+            "completed",
+            detail="optional_degraded",
+            error=str(fail)[:500],
+        )
+        return "Retirement completed with placeholder (non-fatal)."
+
+    return "Retirement agent finished (success)."
 
 
 async def run_mandatory_child_lambdas(
