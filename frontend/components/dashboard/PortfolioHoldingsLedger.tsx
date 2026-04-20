@@ -42,6 +42,8 @@ export type PortfolioHoldingsLedgerProps = {
   signalOpenAddAccount?: number;
   /** Increment from parent to open add-position modal. */
   signalOpenAddPosition?: number;
+  /** Render only modals (no ledger chrome) when the parent supplies its own holdings UI. */
+  modalsOnly?: boolean;
 };
 
 function holdingAsPosition(accountId: string, h: ApiPortfolioHolding): ApiPosition {
@@ -73,6 +75,7 @@ export function PortfolioHoldingsLedger({
   createAccount,
   signalOpenAddAccount = 0,
   signalOpenAddPosition = 0,
+  modalsOnly = false,
 }: PortfolioHoldingsLedgerProps) {
   const { getToken } = useAuth();
   const router = useRouter();
@@ -227,6 +230,7 @@ export function PortfolioHoldingsLedger({
   );
 
   if (loading) {
+    if (modalsOnly) return null;
     return (
       <FinancialCard padding="lg" elevation="flat" id="holdings" className="min-w-0">
         <div className="h-4 w-40 animate-pulse rounded bg-[var(--border)]" />
@@ -261,7 +265,7 @@ export function PortfolioHoldingsLedger({
   if (accounts.length === 0) {
     return (
       <>
-        {mainCard}
+        {!modalsOnly ? mainCard : null}
         <AppModal
           open={addAccountOpen}
           onClose={closeAddAccount}
@@ -295,6 +299,7 @@ export function PortfolioHoldingsLedger({
 
   return (
     <>
+      {!modalsOnly ? (
       <FinancialCard
         padding="lg"
         elevation="flat"
@@ -484,6 +489,7 @@ export function PortfolioHoldingsLedger({
           })}
         </div>
       </FinancialCard>
+      ) : null}
 
       <AppModal
         open={addAccountOpen}

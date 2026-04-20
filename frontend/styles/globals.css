@@ -1,4 +1,8 @@
 @import "tailwindcss";
+
+/* Align `dark:` utilities with existing `html.dark` theme toggle */
+@custom-variant dark (&:where(html.dark, html.dark *));
+
 @import "./design-system.css";
 
 /* ─── Light (default) — enterprise tokens ─── */
