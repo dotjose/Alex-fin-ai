@@ -91,8 +91,8 @@ export default function ProductSnapshot() {
             </p>
             <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">
               No accounts returned for your user yet. Add an account under{" "}
-              <Link href="/accounts" className="font-medium text-[var(--accent)] underline">
-                Accounts
+              <Link href="/dashboard#holdings" className="font-medium text-[var(--accent)] underline">
+                Portfolio
               </Link>{" "}
               to pull balances and positions from the API.
             </p>

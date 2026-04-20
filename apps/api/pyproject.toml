@@ -18,6 +18,15 @@ dependencies = [
     "uvicorn>=0.35.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.3",
+]
+
 [tool.uv.sources]
 alex-database = { path = "../../backend/database", editable = true }
 alex-llm = { path = "../../backend/alex_llm", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

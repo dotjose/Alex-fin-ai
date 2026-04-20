@@ -49,3 +49,33 @@ export function riskBadgeFromPortfolio(
   }
   return { label: "Core risk", variant: "neutral" };
 }
+
+/**
+ * Deterministic 0–100 risk index from allocation + book shape (UI only).
+ * Used when the LLM report does not embed a numeric risk score.
+ */
+export function riskScoreFromPortfolio(
+  breakdown: Record<string, number>,
+  totalValue: number,
+  totalPositionsCount: number
+): number {
+  if (!Number.isFinite(totalValue) || totalValue <= 0) return 0;
+
+  const equity = toNumber(breakdown.equity) / totalValue;
+  const cash = toNumber(breakdown.cash) / totalValue;
+  const fi = toNumber(breakdown.fixed_income) / totalValue;
+  const alt = toNumber(breakdown.alternatives) / totalValue;
+  const unclassified = toNumber(breakdown.unclassified) / totalValue;
+
+  // Equity and alternatives lift score; cash and bonds dampen; unclassified adds uncertainty.
+  let raw =
+    equity * 72 +
+    alt * 38 +
+    unclassified * 52 +
+    (1 - fi) * 8 -
+    cash * 28;
+  if (totalPositionsCount === 0 && cash >= 0.995) {
+    raw = Math.min(raw, 26);
+  }
+  return Math.min(100, Math.max(0, Math.round(raw)));
+}

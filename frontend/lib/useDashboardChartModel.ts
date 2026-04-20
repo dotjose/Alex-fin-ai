@@ -11,6 +11,16 @@ function formatLabel(key: string): string {
     .join(" ");
 }
 
+function normalizePieRows(rows: PieRow[]): PieRow[] {
+  return rows
+    .map((r) => ({
+      ...r,
+      value: Number.isFinite(r.value) && r.value >= 0 ? r.value : 0,
+      percentage: Number.isFinite(r.percentage) ? Math.min(100, Math.max(0, r.percentage)) : 0,
+    }))
+    .filter((r) => r.value > 0 || Boolean(r.ghost));
+}
+
 export type PieRow = {
   key: string;
   name: string;
@@ -70,25 +80,28 @@ export function useDashboardChartModel({
     chartMode: DashboardChartMode;
   } => {
     if (totalValue > 0 && livePie.length > 0) {
-      return { pieData: livePie, chartMode: "live" as const };
+      const normalized = normalizePieRows(livePie);
+      if (normalized.length > 0) {
+        return { pieData: normalized, chartMode: "live" as const };
+      }
     }
     if (totalValue > 0 && cashOnly) {
       return {
-        pieData: [
+        pieData: normalizePieRows([
           {
             key: "cash",
             name: "Cash",
             value: Math.round(totalValue * 100) / 100,
             percentage: 100,
           },
-        ],
+        ]),
         chartMode: "cash" as const,
       };
     }
     if (totalValue > 0) {
       const v = Math.round(totalValue * 100) / 100;
       return {
-        pieData: [
+        pieData: normalizePieRows([
           {
             key: "pending",
             name: "Attribution pending",
@@ -96,18 +109,18 @@ export function useDashboardChartModel({
             percentage: 100,
             ghost: true,
           },
-        ],
+        ]),
         chartMode: "ghost" as const,
       };
     }
     const ghostVal = 25;
     return {
-      pieData: [
+      pieData: normalizePieRows([
         { key: "g1", name: "Equity (ref.)", value: ghostVal, percentage: 25, ghost: true },
         { key: "g2", name: "Bonds (ref.)", value: ghostVal, percentage: 25, ghost: true },
         { key: "g3", name: "Cash (ref.)", value: ghostVal, percentage: 25, ghost: true },
         { key: "g4", name: "Alts (ref.)", value: ghostVal, percentage: 25, ghost: true },
-      ],
+      ]),
       chartMode: "onboarding" as const,
     };
   }, [totalValue, livePie, cashOnly]);
@@ -115,11 +128,18 @@ export function useDashboardChartModel({
   const timeline = useMemo(() => portfolioValueTimeline(jobs, totalValue), [jobs, totalValue]);
 
   const timelineChart = useMemo(() => {
-    if (timeline.length >= 2) return timeline;
+    const sanitizePoint = (p: { label: string; value: number; jobId?: string }) => ({
+      ...p,
+      value: Number.isFinite(p.value) ? p.value : 0,
+    });
+    if (timeline.length >= 2) {
+      return timeline.map(sanitizePoint).filter((p) => Number.isFinite(p.value));
+    }
     if (timeline.length === 1) {
       const p = timeline[0];
       if (!p) return [];
-      return [p, { label: "Now", value: p.value }];
+      const a = sanitizePoint(p);
+      return [a, { label: "Now", value: a.value }];
     }
     return [];
   }, [timeline]);
@@ -127,7 +147,10 @@ export function useDashboardChartModel({
   const { sparkRows, sparkProxy } = useMemo(() => {
     if (timelineChart.length >= 2) {
       return {
-        sparkRows: timelineChart.map((p, i) => ({ i, value: p.value })),
+        sparkRows: timelineChart.map((p, i) => ({
+          i,
+          value: Number.isFinite(p.value) ? p.value : 0,
+        })),
         sparkProxy: false,
       };
     }
@@ -135,7 +158,7 @@ export function useDashboardChartModel({
     const rows = Array.from({ length: 36 }, (_, i) => ({
       i,
       value: seed * (1 + 0.022 * Math.sin(i * 0.32)),
-    }));
+    })).map((r) => ({ ...r, value: Number.isFinite(r.value) ? r.value : seed }));
     return { sparkRows: rows, sparkProxy: true };
   }, [timelineChart, totalValue]);
 
@@ -145,7 +168,12 @@ export function useDashboardChartModel({
     const bonds = toNumber(assetClassBreakdown.fixed_income);
     const alt = toNumber(assetClassBreakdown.alternatives);
     const denom = totalValue > 0 ? totalValue : 1;
-    const colors = ["var(--chart-1)", "var(--chart-3)", "var(--chart-2)", "var(--chart-4)"];
+    const colors = [
+      "var(--chart-equity)",
+      "var(--chart-cash)",
+      "var(--chart-fixed-income)",
+      "var(--chart-alt)",
+    ];
     return [
       { label: "Equity", pct: (eq / denom) * 100, color: colors[0] },
       { label: "Cash", pct: (cash / denom) * 100, color: colors[1] },

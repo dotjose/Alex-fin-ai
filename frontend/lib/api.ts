@@ -37,6 +37,19 @@ export interface Position {
   quantity: number;
 }
 
+export type PortfolioSummaryDto = {
+  cash_balance: number;
+  holdings_value: number;
+  total_value: number;
+};
+
+/** POST/PUT /api/positions — structured payload (cash + holdings reconciled server-side). */
+export type PositionMutationApiResponse = {
+  position: Position & { instrument?: Record<string, unknown> | null };
+  account: Account;
+  summary: PortfolioSummaryDto;
+};
+
 /** Row from `GET /api/jobs` / `GET /api/jobs/{id}` (snake_case from Postgres). */
 export interface Job {
   id: string;
@@ -147,6 +160,24 @@ export function createApiClient(token: string) {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
+      portfolio: (id: string) =>
+        apiRequest<{
+          account_id: string;
+          cash_balance: number;
+          total_positions_value: number;
+          total_value: number;
+          positions_count: number;
+          holdings: Array<{
+            position_id: string;
+            symbol: string;
+            quantity: number;
+            average_price: number | null;
+            current_price: number | null;
+            value: number;
+            weight: number | null;
+            price_status: string;
+          }>;
+        }>(`/api/accounts/${id}/portfolio`, token),
       positions: async (id: string) => {
         const r = await apiRequest<{ positions: Position[] }>(
           `/api/accounts/${id}/positions`,
@@ -158,17 +189,24 @@ export function createApiClient(token: string) {
 
     // Position endpoints
     positions: {
-      create: (data: Partial<Position>) => apiRequest<Position>('/api/positions', token, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      }),
-      update: (id: string, data: Partial<Position>) => apiRequest<Position>(`/api/positions/${id}`, token, {
-        method: 'PUT',
-        body: JSON.stringify(data),
-      }),
-      delete: (id: string) => apiRequest<void>(`/api/positions/${id}`, token, {
-        method: 'DELETE',
-      }),
+      create: (data: Partial<Position>) =>
+        apiRequest<PositionMutationApiResponse>('/api/positions', token, {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }),
+      update: (id: string, data: Partial<Position>) =>
+        apiRequest<PositionMutationApiResponse>(`/api/positions/${id}`, token, {
+          method: 'PUT',
+          body: JSON.stringify(data),
+        }),
+      delete: (id: string) =>
+        apiRequest<{ message: string; account: Account; summary: PortfolioSummaryDto }>(
+          `/api/positions/${id}`,
+          token,
+          {
+            method: 'DELETE',
+          },
+        ),
     },
 
     // Analysis endpoints

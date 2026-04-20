@@ -47,8 +47,8 @@ export default function Layout({ children }: LayoutProps) {
                 </Link>
               </div>
               <nav className="hidden min-w-0 items-center justify-center gap-[var(--space-6)] overflow-x-auto md:flex">
-                {navLink("/dashboard", "Dashboard")}
-                {navLink("/accounts", "Accounts")}
+                {navLink("/dashboard", "Portfolio")}
+                {navLink("/dashboard#holdings", "Holdings")}
                 {navLink("/advisor-team", "Advisor team")}
                 {navLink("/analysis", "Analysis")}
                 {navLink("/settings", "Settings")}
@@ -62,8 +62,8 @@ export default function Layout({ children }: LayoutProps) {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-x-[var(--space-4)] gap-y-[var(--space-2)] pb-[var(--space-3)] md:hidden">
-              {navLink("/dashboard", "Dashboard")}
-              {navLink("/accounts", "Accounts")}
+              {navLink("/dashboard", "Portfolio")}
+              {navLink("/dashboard#holdings", "Holdings")}
               {navLink("/advisor-team", "Advisor team")}
               {navLink("/analysis", "Analysis")}
               {navLink("/settings", "Settings")}

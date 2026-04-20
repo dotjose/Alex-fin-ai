@@ -3,13 +3,17 @@ import Head from "next/head";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../components/Layout";
 import AnalysisControlCard from "../components/dashboard/AnalysisControlCard";
-import Accounts from "../components/dashboard/Accounts";
-import { AccountsSummaryCard } from "../components/dashboard/AccountsSummaryCard";
 import { DashboardActivityCard } from "../components/dashboard/DashboardActivityCard";
-import { DashboardAllocationPanel } from "../components/dashboard/DashboardChartPanels";
+import {
+  DashboardAllocationPanel,
+  DashboardExposurePanel,
+  DashboardSparkPanel,
+} from "../components/dashboard/DashboardChartPanels";
 import { DashboardHeroKpis } from "../components/dashboard/DashboardHeroKpis";
 import { DashboardPerformanceCard } from "../components/dashboard/DashboardPerformanceCard";
 import Insights from "../components/dashboard/Insights";
+import { PortfolioHoldingsLedger } from "../components/dashboard/PortfolioHoldingsLedger";
+import { PortfolioOverviewBand } from "../components/dashboard/PortfolioOverviewBand";
 import { AppPageHero } from "@/components/shell/AppPageHero";
 import { portfolioValueTimeline } from "@/lib/dashboardChartData";
 import { useDashboardChartModel } from "@/lib/useDashboardChartModel";
@@ -23,7 +27,7 @@ import {
 import { showToast } from "../components/Toast";
 import { fetchCapabilities } from "../lib/capabilities";
 import { useDashboardData } from "../lib/useDashboardData";
-import { riskBadgeFromPortfolio } from "@/lib/dashboardRiskBadge";
+import { riskBadgeFromPortfolio, riskScoreFromPortfolio } from "@/lib/dashboardRiskBadge";
 import { DASHBOARD_HEADING, pageTitle } from "@/lib/brand";
 import type { ApiJob } from "@/lib/useDashboardData";
 
@@ -34,6 +38,7 @@ export default function Dashboard() {
   const {
     user: profile,
     accounts,
+    portfolioByAccount,
     positionsByAccount,
     instruments,
     jobs,
@@ -46,6 +51,10 @@ export default function Dashboard() {
     totalPositionsCount,
     totalValue,
     assetClassBreakdown,
+    updatePositionQuantity,
+    deletePosition,
+    createPosition,
+    createAccount,
   } = useDashboardData(enabled, getToken);
 
   const recentFailedJob =
@@ -60,18 +69,18 @@ export default function Dashboard() {
   );
   const [analysisSlow, setAnalysisSlow] = useState(false);
   const [analysisTimedOut, setAnalysisTimedOut] = useState(false);
-  const [dataFreshAt, setDataFreshAt] = useState<Date | null>(null);
+  const [signalAddAccount, setSignalAddAccount] = useState(0);
+  const [signalAddPosition, setSignalAddPosition] = useState(0);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollFailRef = useRef(0);
 
-  useEffect(() => {
-    if (!loading && enabled) {
-      setDataFreshAt(new Date());
-    }
-  }, [loading, enabled]);
-
   const riskBadge = useMemo(
     () => riskBadgeFromPortfolio(assetClassBreakdown, totalValue, totalPositionsCount),
+    [assetClassBreakdown, totalValue, totalPositionsCount]
+  );
+
+  const derivedRiskScore = useMemo(
+    () => riskScoreFromPortfolio(assetClassBreakdown, totalValue, totalPositionsCount),
     [assetClassBreakdown, totalValue, totalPositionsCount]
   );
 
@@ -130,7 +139,7 @@ export default function Dashboard() {
       return;
     }
     const t = window.setTimeout(() => setAnalysisSlow(true), 10_000);
-    return () => clearTimeout(t);
+    return () => window.clearTimeout(t);
   }, [analysisRunning, analysisRunStartedAt]);
 
   useEffect(() => {
@@ -147,7 +156,7 @@ export default function Dashboard() {
         "Stopped waiting for this run. Open the analysis workspace to confirm job status."
       );
     }, 180_000);
-    return () => clearTimeout(t);
+    return () => window.clearTimeout(t);
   }, [analysisRunning, analysisRunStartedAt, clearPoll]);
 
   const onRunAnalysis = useCallback(async () => {
@@ -270,12 +279,12 @@ export default function Dashboard() {
   return (
     <>
       <Head>
-        <title>{pageTitle(DASHBOARD_HEADING)}</title>
+        <title>{pageTitle("Portfolio")}</title>
       </Head>
       <Layout>
         <div className="ds-page pb-[var(--space-12)] pt-[var(--space-2)]">
           <AppPageHero
-            title="Dashboard"
+            title="Portfolio"
             subtitle={
               displayName ? `${displayName} · ${DASHBOARD_HEADING}` : DASHBOARD_HEADING
             }
@@ -285,13 +294,14 @@ export default function Dashboard() {
                 totalValue={totalValue}
                 accountCount={accounts.length}
                 riskBadge={riskBadge}
+                riskScore={totalValue > 0 ? derivedRiskScore : null}
               />
             }
           />
 
           {error && !loading ? (
             <div
-              className="mt-[var(--space-6)] rounded-[12px] border border-[color-mix(in_srgb,var(--danger)_45%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] p-[var(--space-4)] text-sm text-[var(--danger)]"
+              className="mt-[var(--space-6)] rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--danger)_45%,var(--border))] bg-[color-mix(in_srgb,var(--danger)_10%,var(--card))] p-[var(--space-4)] text-sm text-[var(--danger)]"
               role="alert"
             >
               {error}
@@ -317,45 +327,77 @@ export default function Dashboard() {
           {loading ? (
             <>
               <div className="ds-shell mt-[var(--space-6)]">
-                <div className="ds-grid-item ds-shell-span-6 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
-                <div className="ds-grid-item ds-shell-span-6 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
+                <div className="ds-grid-item ds-shell-span-8">
+                  <PortfolioOverviewBand
+                    loading
+                    totalValue={0}
+                    performanceDeltaPct={null}
+                    chartModel={chartModel}
+                    rt={rt}
+                    hasAccounts={false}
+                    analysisRunning={false}
+                    onAddAccount={() => {}}
+                    onAddPosition={() => {}}
+                    onRunAnalysis={() => {}}
+                  />
+                </div>
+                <div className="ds-grid-item ds-shell-span-4">
+                  <div className="h-full min-h-[200px] animate-pulse rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--surface)]" />
+                </div>
               </div>
               <div className="ds-shell mt-[var(--space-6)]">
-                <div className="ds-grid-item ds-shell-span-4 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
-                <div className="ds-grid-item ds-shell-span-4 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
-                <div className="ds-grid-item ds-shell-span-4 h-[var(--dash-row-height)] animate-pulse rounded-[12px] border border-[var(--border)] bg-[var(--surface)]" />
+                <div className="ds-grid-item ds-shell-span-6 h-[var(--dash-row-height)] animate-pulse rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--surface)]" />
+                <div className="ds-grid-item ds-shell-span-6 h-[var(--dash-row-height)] animate-pulse rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--surface)]" />
               </div>
             </>
           ) : (
             <>
               <div className="ds-shell mt-[var(--space-6)]">
-                <div className="ds-grid-item min-w-0 ds-shell-span-6">
-                  <DashboardAllocationPanel model={chartModel} rt={rt} />
+                <div className="ds-grid-item min-w-0 ds-shell-span-8">
+                  <PortfolioOverviewBand
+                    loading={false}
+                    totalValue={totalValue}
+                    performanceDeltaPct={performanceDeltaPct}
+                    chartModel={chartModel}
+                    rt={rt}
+                    hasAccounts={accounts.length > 0}
+                    analysisRunning={analysisRunning}
+                    onAddAccount={() => setSignalAddAccount((n) => n + 1)}
+                    onAddPosition={() => setSignalAddPosition((n) => n + 1)}
+                    onRunAnalysis={() => void onRunAnalysis()}
+                  />
                 </div>
-                <div className="ds-grid-item min-w-0 ds-shell-span-6">
+                <div className="ds-grid-item min-w-0 ds-shell-span-4">
                   <Insights
                     loading={false}
                     job={latestCompletedJob}
+                    derivedRiskScore={derivedRiskScore}
                     failedJob={!latestCompletedJob ? recentFailedJob : null}
                     analysisRunning={analysisRunning}
                     analysisSlow={analysisSlow}
                     liveJob={liveJob}
                     analysisRunStartedAt={analysisRunStartedAt}
                     fillCell
+                    previewBulletMax={5}
+                    hideInsightChips
                   />
                 </div>
               </div>
 
               <div className="ds-shell mt-[var(--space-6)]">
                 <div className="ds-grid-item min-w-0 ds-shell-span-4">
-                  <AccountsSummaryCard
-                    loading={false}
-                    accounts={accounts}
-                    positionsByAccount={positionsByAccount}
-                    instruments={instruments}
-                  />
+                  <DashboardAllocationPanel model={chartModel} rt={rt} />
                 </div>
                 <div className="ds-grid-item min-w-0 ds-shell-span-4">
+                  <DashboardExposurePanel model={chartModel} rt={rt} />
+                </div>
+                <div className="ds-grid-item min-w-0 ds-shell-span-4">
+                  <DashboardSparkPanel model={chartModel} />
+                </div>
+              </div>
+
+              <div className="ds-shell mt-[var(--space-6)]">
+                <div className="ds-grid-item min-w-0 ds-shell-span-6">
                   <DashboardPerformanceCard
                     model={chartModel}
                     performanceDeltaPct={performanceDeltaPct}
@@ -363,7 +405,7 @@ export default function Dashboard() {
                     loading={false}
                   />
                 </div>
-                <div className="ds-grid-item min-w-0 ds-shell-span-4">
+                <div className="ds-grid-item min-w-0 ds-shell-span-6">
                   <DashboardActivityCard loading={false} jobs={jobs} />
                 </div>
               </div>
@@ -372,15 +414,18 @@ export default function Dashboard() {
 
           {!loading ? (
             <div className="mt-[var(--space-8)] min-w-0">
-              <p className="ds-caption">Full ledger</p>
-              <Accounts
+              <PortfolioHoldingsLedger
                 loading={loading}
                 accounts={accounts}
+                portfolioByAccount={portfolioByAccount}
                 positionsByAccount={positionsByAccount}
                 instruments={instruments}
-                dataFreshAt={dataFreshAt}
-                onSync={() => void refetch()}
-                cardClassName="mt-[var(--space-4)]"
+                updatePositionQuantity={updatePositionQuantity}
+                deletePosition={deletePosition}
+                createPosition={createPosition}
+                createAccount={createAccount}
+                signalOpenAddAccount={signalAddAccount}
+                signalOpenAddPosition={signalAddPosition}
               />
             </div>
           ) : null}

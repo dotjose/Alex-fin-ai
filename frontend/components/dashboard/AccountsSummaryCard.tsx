@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { useMemo } from "react";
-import type { ApiAccount, ApiInstrument, ApiPosition } from "@/lib/useDashboardData";
+import type {
+  ApiAccount,
+  ApiInstrument,
+  ApiPortfolioSnapshot,
+  ApiPosition,
+} from "@/lib/useDashboardData";
 import { FinancialCard } from "@/components/ui/FinancialCard";
 import { formatUsdDetailed, toNumber } from "@/lib/format";
 
@@ -21,6 +26,7 @@ function accountTotalValue(
 export type AccountsSummaryCardProps = {
   loading: boolean;
   accounts: ApiAccount[];
+  portfolioByAccount?: Record<string, ApiPortfolioSnapshot>;
   positionsByAccount: Record<string, ApiPosition[]>;
   instruments: Record<string, ApiInstrument>;
 };
@@ -31,6 +37,7 @@ export type AccountsSummaryCardProps = {
 export function AccountsSummaryCard({
   loading,
   accounts,
+  portfolioByAccount,
   positionsByAccount,
   instruments,
 }: AccountsSummaryCardProps) {
@@ -39,11 +46,13 @@ export function AccountsSummaryCard({
       .map((a) => ({
         id: a.id,
         name: a.account_name || "Account",
-        value: accountTotalValue(a, positionsByAccount[a.id] ?? [], instruments),
+        value:
+          portfolioByAccount?.[a.id]?.total_value ??
+          accountTotalValue(a, positionsByAccount[a.id] ?? [], instruments),
       }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 4);
-  }, [accounts, positionsByAccount, instruments]);
+  }, [accounts, portfolioByAccount, positionsByAccount, instruments]);
 
   if (loading) {
     return (
@@ -67,8 +76,8 @@ export function AccountsSummaryCard({
           Add an account to populate book-level intelligence.
         </p>
         <Link
-          href="/accounts"
-          className="mt-4 inline-flex rounded-[10px] bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white transition active:scale-[0.98] hover:opacity-95"
+          href="/dashboard#holdings"
+          className="mt-4 inline-flex rounded-[10px] bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--text-on-accent)] transition active:scale-[0.98] hover:opacity-95"
         >
           Add account
         </Link>
@@ -84,7 +93,7 @@ export function AccountsSummaryCard({
           <p className="ds-h3 mt-1">Summary</p>
         </div>
         <Link
-          href="/accounts"
+          href="/dashboard#holdings"
           className="shrink-0 rounded-[10px] border border-[var(--border)] px-2.5 py-1 text-[12px] font-semibold text-[var(--accent)] transition hover:bg-[var(--surface-hover)]"
         >
           View all
@@ -94,7 +103,7 @@ export function AccountsSummaryCard({
         {rows.map((r) => (
           <li key={r.id}>
             <Link
-              href={`/accounts/${r.id}`}
+              href={`/dashboard?account=${encodeURIComponent(r.id)}#holdings`}
               className="flex items-center justify-between gap-2 rounded-[10px] border border-transparent px-2 py-2 transition hover:border-[var(--border)] hover:bg-[var(--surface-hover)]"
             >
               <span className="min-w-0 truncate text-[13px] font-medium text-[var(--text-primary)]">{r.name}</span>

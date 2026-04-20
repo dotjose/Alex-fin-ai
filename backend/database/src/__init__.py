@@ -4,6 +4,7 @@ Database package for Alex Financial Planner (Supabase / pgvector).
 
 from .migrations import run_pending_migrations, warn_if_core_tables_missing
 from .models import Database
+from .repositories.position_repository import PositionPersistenceError
 from .schemas import (
     RegionType,
     AssetClassType,
@@ -25,6 +26,7 @@ from .schemas import (
 
 __all__ = [
     "Database",
+    "PositionPersistenceError",
     "run_pending_migrations",
     "warn_if_core_tables_missing",
     "InstrumentCreate",

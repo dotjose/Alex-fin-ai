@@ -13,10 +13,30 @@ from pydantic import BaseModel
 from core.auth import current_user_id_factory
 from core.config import Settings
 from core.route_errors import log_and_raise_http
+from services.account_portfolio_summary import decimal_from, summarize_account
 from services.supabase_client import get_database
+from src import PositionPersistenceError
 from src.schemas import InstrumentCreate, PositionCreate
 
 logger = logging.getLogger(__name__)
+
+
+def _enriched_position(db, row: dict) -> dict:
+    sym = row.get("symbol")
+    inst = db.instruments.find_by_symbol(sym) if sym else None
+    return {**row, "instrument": inst}
+
+
+def _position_mutation_payload(db, account_id: str, row: dict) -> dict:
+    acct = db.accounts.find_by_id(account_id)
+    if not acct:
+        raise RuntimeError("account missing after position mutation")
+    summary = summarize_account(db, account_id)
+    return {
+        "position": _enriched_position(db, row),
+        "account": acct,
+        "summary": summary,
+    }
 
 
 class PositionUpdate(BaseModel):
@@ -75,13 +95,81 @@ def build_router(settings: Settings) -> APIRouter:
                 )
                 db.instruments.create_instrument(new_instrument)
 
-            position_id = db.positions.add_position(
-                account_id=position.account_id,
-                symbol=symbol_upper,
-                quantity=position.quantity,
+            inst_row = db.instruments.find_by_symbol(symbol_upper)
+            price = decimal_from(inst_row.get("current_price")) if inst_row else Decimal(0)
+
+            existing = db.positions.find_by_account_and_symbol(
+                position.account_id, symbol_upper
             )
-            row = db.positions.find_by_id(position_id)
-            return jsonable_encoder(row)
+            old_qty = decimal_from(existing["quantity"]) if existing else Decimal(0)
+            new_qty = decimal_from(position.quantity)
+            delta = new_qty - old_qty
+            trade = delta * price
+            cash = decimal_from(account.get("cash_balance"))
+
+            if trade > 0 and cash < trade:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Insufficient cash for this trade at the current mark.",
+                )
+
+            position_id: str | None = None
+            try:
+                position_id = db.positions.add_position(
+                    account_id=position.account_id,
+                    symbol=symbol_upper,
+                    quantity=position.quantity,
+                )
+            except PositionPersistenceError as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Could not save the position. Please try again.",
+                ) from e
+
+            try:
+                row = db.positions.find_by_id(position_id)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Position was saved but could not be loaded.",
+                ) from e
+            if not row:
+                logger.error(
+                    "POST /api/positions empty row after save position_id=%s",
+                    position_id,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Position was saved but could not be loaded.",
+                )
+
+            if trade != 0:
+                try:
+                    db.accounts.update(
+                        position.account_id,
+                        {"cash_balance": cash - trade},
+                    )
+                except Exception as e:
+                    try:
+                        if existing:
+                            db.positions.update(position_id, {"quantity": old_qty})
+                        else:
+                            db.positions.delete(position_id)
+                    except Exception:
+                        logger.critical(
+                            "POST /api/positions cash update failed and position rollback failed "
+                            "position_id=%s",
+                            position_id,
+                            exc_info=True,
+                        )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Could not update cash after saving the position.",
+                    ) from e
+
+            return jsonable_encoder(
+                _position_mutation_payload(db, position.account_id, row)
+            )
         except HTTPException:
             raise
         except Exception as e:
@@ -101,9 +189,63 @@ def build_router(settings: Settings) -> APIRouter:
             if not account or account.get("clerk_user_id") != clerk_user_id:
                 raise HTTPException(status_code=403, detail="Not authorized")
             update_data = position_update.model_dump(exclude_unset=True)
-            db.positions.update(position_id, update_data)
-            row = db.positions.find_by_id(position_id)
-            return jsonable_encoder(row)
+            account_id = str(position["account_id"])
+            symbol = str(position["symbol"])
+            inst_row = db.instruments.find_by_symbol(symbol)
+            price = decimal_from(inst_row.get("current_price")) if inst_row else Decimal(0)
+            old_qty = decimal_from(position.get("quantity"))
+            cash = decimal_from(account.get("cash_balance"))
+
+            trade = Decimal(0)
+            new_qty = old_qty
+            if "quantity" in update_data and update_data["quantity"] is not None:
+                new_qty = decimal_from(update_data["quantity"])
+                trade = (new_qty - old_qty) * price
+                if trade > 0 and cash < trade:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Insufficient cash for this trade at the current mark.",
+                    )
+
+            try:
+                db.positions.update(position_id, update_data)
+            except PositionPersistenceError as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Could not update the position. Please try again.",
+                ) from e
+            try:
+                row = db.positions.find_by_id(position_id)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Position was updated but could not be reloaded.",
+                ) from e
+            if not row:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Position was updated but could not be reloaded.",
+                )
+
+            if trade != 0:
+                try:
+                    db.accounts.update(account_id, {"cash_balance": cash - trade})
+                except Exception as e:
+                    try:
+                        db.positions.update(position_id, {"quantity": old_qty})
+                    except Exception:
+                        logger.critical(
+                            "PUT /api/positions cash update failed and quantity rollback failed "
+                            "position_id=%s",
+                            position_id,
+                            exc_info=True,
+                        )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Could not update cash after updating the position.",
+                    ) from e
+
+            return jsonable_encoder(_position_mutation_payload(db, account_id, row))
         except HTTPException:
             raise
         except Exception as e:
@@ -118,8 +260,49 @@ def build_router(settings: Settings) -> APIRouter:
             account = db.accounts.find_by_id(position["account_id"])
             if not account or account.get("clerk_user_id") != clerk_user_id:
                 raise HTTPException(status_code=403, detail="Not authorized")
-            db.positions.delete(position_id)
-            return {"message": "Position deleted"}
+            account_id = str(position["account_id"])
+            symbol = str(position["symbol"])
+            qty = decimal_from(position.get("quantity"))
+            inst_row = db.instruments.find_by_symbol(symbol)
+            price = decimal_from(inst_row.get("current_price")) if inst_row else Decimal(0)
+            proceeds = qty * price
+            cash = decimal_from(account.get("cash_balance"))
+
+            if proceeds != 0:
+                try:
+                    db.accounts.update(account_id, {"cash_balance": cash + proceeds})
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Could not credit cash before removing the position.",
+                    ) from e
+            try:
+                db.positions.delete(position_id)
+            except Exception as e:
+                if proceeds != 0:
+                    try:
+                        db.accounts.update(account_id, {"cash_balance": cash})
+                    except Exception:
+                        logger.critical(
+                            "DELETE /api/positions delete failed and cash revert failed "
+                            "position_id=%s",
+                            position_id,
+                            exc_info=True,
+                        )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Could not delete the position.",
+                ) from e
+
+            acct = db.accounts.find_by_id(account_id)
+            summary = summarize_account(db, account_id)
+            return jsonable_encoder(
+                {
+                    "message": "Position deleted",
+                    "account": acct,
+                    "summary": summary,
+                }
+            )
         except HTTPException:
             raise
         except Exception as e:

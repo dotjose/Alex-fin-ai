@@ -31,7 +31,18 @@ import {
   pipelineChipClass,
   readPipeline,
 } from '@/lib/analysisPipeline';
-import { useRechartsTheme } from '@/lib/useRechartsTheme';
+import {
+  rechartsTooltipContentStyle,
+  rechartsTooltipItemStyle,
+  rechartsTooltipLabelStyle,
+} from "@/lib/rechartsTooltipStyle";
+import { useRechartsTheme } from "@/lib/useRechartsTheme";
+
+const chartTooltipProps = {
+  contentStyle: rechartsTooltipContentStyle(),
+  itemStyle: rechartsTooltipItemStyle(),
+  labelStyle: rechartsTooltipLabelStyle(),
+} as const;
 
 interface Job {
   id: string;
@@ -437,7 +448,10 @@ export default function Analysis() {
                         <Cell key={`cell-${idx}`} fill={entry.color || rt.series[idx % rt.series.length]} />
                       ))}
                     </Pie>
-                    <Tooltip formatter={(value: number) => `$${value.toLocaleString('en-US')}`} />
+                    <Tooltip
+                      {...chartTooltipProps}
+                      formatter={(value: number) => `$${value.toLocaleString("en-US")}`}
+                    />
                   </PieChart>
                 ) : chartType === 'horizontalBar' ? (
                   // For horizontal bars, just use regular vertical bars with rotated labels
@@ -461,7 +475,10 @@ export default function Analysis() {
                     <YAxis
                       tickFormatter={(value) => `$${(value/1000).toFixed(0)}k`}
                     />
-                    <Tooltip formatter={(value: number) => `$${value.toLocaleString('en-US')}`} />
+                    <Tooltip
+                      {...chartTooltipProps}
+                      formatter={(value: number) => `$${value.toLocaleString("en-US")}`}
+                    />
                     <Bar dataKey="value">
                       {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
                       {chartData.data?.map((entry: any, index: number) => (
@@ -478,7 +495,10 @@ export default function Analysis() {
                     />
                     <XAxis dataKey="name" angle={-45} textAnchor="end" height={80} />
                     <YAxis tickFormatter={(value) => `$${(value/1000).toFixed(0)}k`} />
-                    <Tooltip formatter={(value: number) => `$${value.toLocaleString('en-US')}`} />
+                    <Tooltip
+                      {...chartTooltipProps}
+                      formatter={(value: number) => `$${value.toLocaleString("en-US")}`}
+                    />
                     <Bar dataKey="value" fill={chartData.color || rt.series[0]} />
                   </BarChart>
                 ) : (
@@ -491,7 +511,10 @@ export default function Analysis() {
                     />
                     <XAxis dataKey={chartData.xKey || "year"} />
                     <YAxis tickFormatter={(value) => `$${(value/1000).toFixed(0)}k`} />
-                    <Tooltip formatter={(value: number) => `$${value.toLocaleString('en-US')}`} />
+                    <Tooltip
+                      {...chartTooltipProps}
+                      formatter={(value: number) => `$${value.toLocaleString("en-US")}`}
+                    />
                     <Line type="monotone" dataKey="value" stroke={rt.series[0]} strokeWidth={2} />
                   </LineChart>
                 )}

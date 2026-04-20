@@ -1,12 +1,53 @@
 export const THEME_STORAGE_KEY = "alexfin-theme";
+/** Legacy key — migrated once into `alexfin-theme`. */
+const LEGACY_THEME_STORAGE_KEY = "theme";
 
 export type ThemePreference = "light" | "dark" | "system";
+
+const themeListeners = new Set<() => void>();
+
+/** Notify `useSyncExternalStore` subscribers after same-tab preference writes. */
+export function emitThemePreferenceChange() {
+  themeListeners.forEach((fn) => fn());
+}
+
+/** Subscribe to theme-related updates (storage, OS scheme, html.dark mutations). */
+export function subscribeToTheme(onStoreChange: () => void) {
+  themeListeners.add(onStoreChange);
+  if (typeof window === "undefined") {
+    return () => {
+      themeListeners.delete(onStoreChange);
+    };
+  }
+
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === THEME_STORAGE_KEY || e.key === LEGACY_THEME_STORAGE_KEY) onStoreChange();
+  };
+  const onScheme = () => onStoreChange();
+  window.addEventListener("storage", onStorage);
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  mq.addEventListener("change", onScheme);
+  const obs = new MutationObserver(onStoreChange);
+  obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+
+  return () => {
+    themeListeners.delete(onStoreChange);
+    window.removeEventListener("storage", onStorage);
+    mq.removeEventListener("change", onScheme);
+    obs.disconnect();
+  };
+}
 
 export function getStoredTheme(): ThemePreference {
   if (typeof window === "undefined") return "dark";
   try {
     const v = localStorage.getItem(THEME_STORAGE_KEY);
     if (v === "dark" || v === "light" || v === "system") return v;
+    const legacy = localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
+    if (legacy === "dark" || legacy === "light") {
+      localStorage.setItem(THEME_STORAGE_KEY, legacy);
+      return legacy;
+    }
   } catch {
     /* ignore */
   }

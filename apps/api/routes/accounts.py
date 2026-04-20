@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from core.auth import current_user_id_factory
 from core.config import Settings
 from core.route_errors import log_and_raise_http
+from services.portfolio_snapshot import build_account_portfolio_snapshot
 from services.supabase_client import get_database
 from src.schemas import AccountCreate
 
@@ -37,6 +38,26 @@ def build_router(settings: Settings) -> APIRouter:
             return jsonable_encoder(rows)
         except Exception as e:
             log_and_raise_http(logger, e, context="GET /api/accounts")
+
+    @router.get("/accounts/{account_id}/portfolio")
+    async def get_account_portfolio(account_id: str, clerk_user_id: str = Depends(get_uid)):
+        """Authoritative marks, values, and weights (Polygon + DB positions)."""
+        try:
+            account = db.accounts.find_by_id(account_id)
+            if not account:
+                raise HTTPException(status_code=404, detail="Account not found")
+            if account.get("clerk_user_id") != clerk_user_id:
+                raise HTTPException(status_code=403, detail="Not authorized")
+            snap = build_account_portfolio_snapshot(
+                db,
+                account_id=account_id,
+                polygon_api_key=settings.polygon_api_key,
+            )
+            return jsonable_encoder(snap)
+        except HTTPException:
+            raise
+        except Exception as e:
+            log_and_raise_http(logger, e, context="GET /api/accounts/{account_id}/portfolio")
 
     @router.post("/accounts")
     async def create_account(

@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { Fragment, useCallback, useMemo, useState } from "react";
-import type { ApiAccount, ApiInstrument, ApiPosition } from "@/lib/useDashboardData";
+import type {
+  ApiAccount,
+  ApiInstrument,
+  ApiPortfolioSnapshot,
+  ApiPosition,
+} from "@/lib/useDashboardData";
 import { FinancialCard } from "@/components/ui/FinancialCard";
 import { formatDataFreshness } from "@/lib/dashboardFreshness";
 import { formatUsdDetailed, toNumber } from "@/lib/format";
@@ -8,6 +13,7 @@ import { formatUsdDetailed, toNumber } from "@/lib/format";
 export interface AccountsProps {
   loading: boolean;
   accounts: ApiAccount[];
+  portfolioByAccount?: Record<string, ApiPortfolioSnapshot>;
   positionsByAccount: Record<string, ApiPosition[]>;
   instruments: Record<string, ApiInstrument>;
   dataFreshAt: Date | null;
@@ -54,6 +60,7 @@ function AccountsSkeleton({ cardClassName }: { cardClassName: string }) {
 export default function Accounts({
   loading,
   accounts,
+  portfolioByAccount,
   positionsByAccount,
   instruments,
   dataFreshAt,
@@ -96,8 +103,8 @@ export default function Accounts({
             <p className="mt-1 text-[11px] text-[var(--text-secondary)]">Required to populate book and AI inputs.</p>
           </div>
           <Link
-            href="/accounts"
-            className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[11px] font-semibold text-white transition hover:opacity-95"
+            href="/dashboard#holdings"
+            className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[11px] font-semibold text-[var(--text-on-accent)] transition hover:opacity-95"
           >
             Add account
           </Link>
@@ -129,8 +136,8 @@ export default function Accounts({
             {syncing ? "Syncing" : "Sync"}
           </button>
           <Link
-            href="/accounts"
-            className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[11px] font-semibold text-white transition hover:opacity-95"
+            href="/dashboard#holdings"
+            className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[11px] font-semibold text-[var(--text-on-accent)] transition hover:opacity-95"
           >
             Add account
           </Link>
@@ -153,7 +160,9 @@ export default function Accounts({
               const id = acc.id;
               const positions = positionsByAccount[id] || [];
               const expanded = openId === id;
-              const value = accountTotalValue(acc, positions, instruments);
+              const value =
+                portfolioByAccount?.[id]?.total_value ??
+                accountTotalValue(acc, positions, instruments);
               const status =
                 positions.length > 0
                   ? "Linked"
@@ -194,7 +203,10 @@ export default function Accounts({
                         {positions.length === 0 ? (
                           <p className="text-[11px] text-[var(--text-secondary)]">
                             No positions ·{" "}
-                            <Link href={`/accounts/${id}`} className="font-semibold text-[var(--accent)]">
+                            <Link
+                              href={`/dashboard?account=${encodeURIComponent(id)}#holdings`}
+                              className="font-semibold text-[var(--accent)]"
+                            >
                               Open account
                             </Link>
                           </p>

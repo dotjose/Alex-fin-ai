@@ -14,7 +14,7 @@ export type DsCardProps = {
 };
 
 /** Bordered surface — min-w-0 + overflow hidden to prevent flex/grid blowout. */
-export function DsCard({ children, className = "", padding = "md" }: DsCardProps) {
+export function DsCard({ children, className = "", padding = "lg" }: DsCardProps) {
   return (
     <section
       className={`ds-card-interactive min-w-0 overflow-hidden rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--card)] ${pad[padding]} ${className}`.trim()}

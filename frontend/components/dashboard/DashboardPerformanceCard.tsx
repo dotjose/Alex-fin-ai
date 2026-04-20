@@ -11,7 +11,7 @@ type Props = {
 };
 
 function formatDelta(pct: number | null): string {
-  if (pct == null || !Number.isFinite(pct)) return "—";
+  if (pct == null || !Number.isFinite(pct)) return "";
   const sign = pct > 0 ? "+" : "";
   return `${sign}${pct.toFixed(1)}%`;
 }
@@ -49,16 +49,16 @@ export function DashboardPerformanceCard({
                 ? "text-[var(--success)]"
                 : performanceDeltaPct != null && performanceDeltaPct < 0
                   ? "text-[var(--danger)]"
-                  : ""
+                  : "text-[var(--text-secondary)]"
             }`}
           >
-            {formatDelta(performanceDeltaPct)}
+            {formatDelta(performanceDeltaPct) || "Add history"}
           </p>
         </div>
         <div className="min-w-0 overflow-hidden rounded-[10px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
           <p className="ds-caption">Last run</p>
           <p className="mt-1 truncate text-[12px] font-medium text-[var(--text-primary)]">
-            {lastAnalysisLabel?.trim() ? lastAnalysisLabel : "—"}
+            {lastAnalysisLabel?.trim() ? lastAnalysisLabel : "No completed runs"}
           </p>
         </div>
       </div>

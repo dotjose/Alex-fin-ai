@@ -18,6 +18,8 @@ export type DashboardHeroKpisProps = {
   totalValue: number;
   accountCount: number;
   riskBadge: RiskBadge;
+  /** Book-derived 0–100 risk index (shown under posture when portfolio has value). */
+  riskScore?: number | null;
 };
 
 export function DashboardHeroKpis({
@@ -25,6 +27,7 @@ export function DashboardHeroKpis({
   totalValue,
   accountCount,
   riskBadge,
+  riskScore = null,
 }: DashboardHeroKpisProps) {
   return (
     <div className="grid min-w-0 grid-cols-1 gap-[var(--space-6)] md:grid-cols-3">
@@ -37,7 +40,11 @@ export function DashboardHeroKpis({
           <div className="mt-[var(--space-3)] h-9 w-40 animate-pulse rounded bg-[var(--border)]" />
         ) : (
           <p className="ds-hero-metric mt-[var(--space-2)] truncate tabular-nums text-[var(--text-primary)]">
-            {totalValue > 0 ? formatUsd(totalValue) : accountCount === 0 ? "—" : "Initializing…"}
+            {totalValue > 0
+              ? formatUsd(totalValue)
+              : accountCount === 0
+                ? "Add accounts"
+                : "Build positions"}
           </p>
         )}
       </div>
@@ -49,11 +56,19 @@ export function DashboardHeroKpis({
         {loading ? (
           <div className="mt-[var(--space-3)] h-7 w-24 animate-pulse rounded bg-[var(--border)]" />
         ) : (
-          <span
-            className={`mt-[var(--space-3)] inline-flex max-w-full truncate rounded-[10px] border px-3 py-1 text-[13px] font-semibold ${badgeClass(riskBadge.variant)}`}
-          >
-            {riskBadge.label}
-          </span>
+          <div className="mt-[var(--space-3)] min-w-0">
+            <span
+              className={`inline-flex max-w-full truncate rounded-[10px] border px-3 py-1 text-[13px] font-semibold ${badgeClass(riskBadge.variant)}`}
+            >
+              {riskBadge.label}
+            </span>
+            {riskScore != null && Number.isFinite(riskScore) && totalValue > 0 ? (
+              <p className="mt-[var(--space-2)] text-[11px] tabular-nums text-[var(--text-secondary)]">
+                Risk index <span className="font-semibold text-[var(--text-primary)]">{Math.round(riskScore)}</span>
+                /100
+              </p>
+            ) : null}
+          </div>
         )}
       </div>
       <div className="ds-grid-item min-w-0 overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-4)]">

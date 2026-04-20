@@ -35,12 +35,10 @@ export function MarkdownBriefPanel({
   return (
     <div className="ds-stack-4 min-w-0">
       <DsSectionHeader title={title} description={description} />
-      <DsCard padding="md" className="ds-stack-3">
+      <DsCard padding="lg" className="ds-stack-3">
         <div className="min-w-0 border-b border-[var(--border)] pb-3">
           <p className="ds-caption">Summary</p>
-          <p className="ds-body mt-2 text-[var(--text-secondary)] ds-line-clamp-4 break-words">
-            {keyInsight}
-          </p>
+          <p className="ds-body-muted mt-2 ds-line-clamp-4 break-words">{keyInsight}</p>
         </div>
         {insight.bullets.length > 0 ? (
           <div>
@@ -49,12 +47,34 @@ export function MarkdownBriefPanel({
               {insight.bullets.slice(0, 5).map((b, i) => (
                 <li
                   key={i}
-                  className="min-w-0 overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm leading-snug text-[var(--text-secondary)] ds-line-clamp-5 break-words"
+                  className="min-w-0 overflow-hidden rounded-[var(--radius-card)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 text-sm leading-snug text-[var(--text-secondary)] ds-line-clamp-5 break-words"
                 >
                   {b}
                 </li>
               ))}
             </ul>
+          </div>
+        ) : null}
+        {insight.sections.length > 1 ? (
+          <div>
+            <p className="ds-caption">Brief sections</p>
+            <div className="mt-2 space-y-2">
+              {insight.sections.slice(0, 5).map((sec, idx) => (
+                <details
+                  key={`${sec.id}-${idx}`}
+                  className="rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+                >
+                  <summary className="cursor-pointer text-sm font-medium text-[var(--text-primary)]">
+                    {sec.title?.trim() || `Section ${idx + 1}`}
+                  </summary>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-[var(--text-secondary)]">
+                    {sec.bullets.slice(0, 4).map((line, j) => (
+                      <li key={j}>{line}</li>
+                    ))}
+                  </ul>
+                </details>
+              ))}
+            </div>
           </div>
         ) : null}
         {insight.chips.length > 0 ? (
@@ -69,7 +89,7 @@ export function MarkdownBriefPanel({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="w-fit rounded-[10px] bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-95"
+          className="w-fit rounded-[var(--radius-control)] bg-[var(--accent)] px-4 py-2.5 text-sm font-semibold text-[var(--text-on-accent)] transition hover:opacity-95"
         >
           Full report
         </button>

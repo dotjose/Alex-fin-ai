@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiJob } from "@/lib/useDashboardData";
 import { FinancialCard } from "@/components/ui/FinancialCard";
-import { buildStructuredInsight } from "@/lib/insightStructure";
+import { buildStructuredInsight, portfolioHealthFromRisk } from "@/lib/insightStructure";
 import { readCachedInsight, writeCachedInsight } from "@/lib/insightSessionCache";
 import InsightReportModal from "./InsightReportModal";
 
@@ -35,7 +35,7 @@ function InsightsSkeleton({ fillCell }: { fillCell?: boolean }) {
   );
 }
 
-function AnalysisProgressCard({
+const AnalysisProgressCard = memo(function AnalysisProgressCard({
   analysisSlow,
   liveJob,
   startedAt,
@@ -127,11 +127,13 @@ function AnalysisProgressCard({
       </Link>
     </FinancialCard>
   );
-}
+});
 
 export interface InsightsProps {
   loading: boolean;
   job: ApiJob | null;
+  /** Book-derived 0–100 risk index when the report omits a score. */
+  derivedRiskScore: number;
   failedJob?: ApiJob | null;
   analysisRunning?: boolean;
   analysisSlow?: boolean;
@@ -139,22 +141,40 @@ export interface InsightsProps {
   analysisRunStartedAt?: number | null;
   /** Fill dashboard grid cell without overflow. */
   fillCell?: boolean;
+  /** Max bullets in the completed summary (default 3). */
+  previewBulletMax?: number;
+  /** Hide tag chips for a calmer portfolio rail. */
+  hideInsightChips?: boolean;
 }
 
 export default function Insights({
   loading,
   job,
+  derivedRiskScore,
   failedJob = null,
   analysisRunning = false,
   analysisSlow = false,
   liveJob = null,
   analysisRunStartedAt = null,
   fillCell = false,
+  previewBulletMax = 3,
+  hideInsightChips = false,
 }: InsightsProps) {
-  const [modalOpen, setModalOpen] = useState(false);
-  const [cacheModal, setCacheModal] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportTitle, setReportTitle] = useState("");
+  const [reportMd, setReportMd] = useState("");
   const [cached, setCached] = useState<ReturnType<typeof readCachedInsight>>(null);
   const cacheWrittenForJob = useRef<string | null>(null);
+
+  const openReport = useCallback((title: string, markdown: string) => {
+    setReportTitle(title);
+    setReportMd(markdown);
+    setReportOpen(true);
+  }, []);
+
+  const closeReport = useCallback(() => {
+    setReportOpen(false);
+  }, []);
 
   useEffect(() => {
     setCached(readCachedInsight());
@@ -168,7 +188,11 @@ export default function Insights({
   }, [completed, job]);
 
   useEffect(() => {
-    if (!job || job.status !== "completed") return;
+    if (!job) {
+      cacheWrittenForJob.current = null;
+      return;
+    }
+    if (job.status !== "completed") return;
     if (cacheWrittenForJob.current === job.id) return;
     cacheWrittenForJob.current = job.id;
     const s = buildStructuredInsight(job);
@@ -180,20 +204,37 @@ export default function Insights({
       fullMarkdown: s.fullMarkdown,
     });
     setCached(readCachedInsight());
-  }, [job]);
+  }, [job?.id, job?.status]);
+
+  const reportModal = (
+    <InsightReportModal
+      open={reportOpen}
+      onClose={closeReport}
+      title={reportTitle}
+      markdown={reportMd}
+    />
+  );
 
   if (loading) {
-    return <InsightsSkeleton fillCell={fillCell} />;
+    return (
+      <>
+        <InsightsSkeleton fillCell={fillCell} />
+        {reportModal}
+      </>
+    );
   }
 
   if (analysisRunning) {
     return (
-      <AnalysisProgressCard
-        analysisSlow={analysisSlow}
-        liveJob={liveJob}
-        startedAt={analysisRunStartedAt ?? null}
-        fillCell={fillCell}
-      />
+      <>
+        <AnalysisProgressCard
+          analysisSlow={analysisSlow}
+          liveJob={liveJob}
+          startedAt={analysisRunStartedAt ?? null}
+          fillCell={fillCell}
+        />
+        {reportModal}
+      </>
     );
   }
 
@@ -234,7 +275,7 @@ export default function Insights({
               </ul>
               <button
                 type="button"
-                onClick={() => setCacheModal(true)}
+                onClick={() => openReport(cached.snapshotTitle, cached.fullMarkdown)}
                 className="mt-2 text-[11px] font-semibold text-[var(--accent)]"
               >
                 View full analysis
@@ -256,114 +297,129 @@ export default function Insights({
               Go to controls
             </Link>
           </div>
-          <Link href="/analysis" className="mt-3 inline-block text-[11px] font-semibold text-[var(--text-secondary)] underline-offset-2 hover:text-[var(--text-primary)]">
+          <Link
+            href="/analysis"
+            className="mt-3 inline-block text-[11px] font-semibold text-[var(--text-secondary)] underline-offset-2 hover:text-[var(--text-primary)]"
+          >
             Open workspace
           </Link>
         </FinancialCard>
-
-        {useCache && cached ? (
-          <InsightReportModal
-            open={cacheModal}
-            onClose={() => setCacheModal(false)}
-            title={cached.snapshotTitle}
-            markdown={cached.fullMarkdown}
-          />
-        ) : null}
+        {reportModal}
       </>
     );
   }
 
   if (!job || !structured) {
     return (
-      <FinancialCard padding="md" elevation="flat" className={fillCell ? cellFill : ""}>
-        <p className="text-xs text-[var(--text-secondary)]">Payload incomplete for structured view.</p>
-        {job ? (
-          <Link href={`/analysis?job_id=${job.id}`} className="mt-2 inline-block text-[11px] font-semibold text-[var(--accent)]">
-            Workspace →
-          </Link>
-        ) : null}
-      </FinancialCard>
+      <>
+        <FinancialCard padding="md" elevation="flat" className={fillCell ? cellFill : ""}>
+          <p className="text-xs text-[var(--text-secondary)]">Payload incomplete for structured view.</p>
+          {job ? (
+            <Link
+              href={`/analysis?job_id=${job.id}`}
+              className="mt-2 inline-block text-[11px] font-semibold text-[var(--accent)]"
+            >
+              Workspace →
+            </Link>
+          ) : null}
+        </FinancialCard>
+        {reportModal}
+      </>
     );
   }
 
-  const previewBullets = structured.bullets.slice(0, 3);
-  const health = structured.health;
+  const extractedRisk = structured.riskScore;
+  const hasExtracted = extractedRisk != null && Number.isFinite(extractedRisk);
+  const displayRisk = hasExtracted ? Math.round(Number(extractedRisk)) : derivedRiskScore;
+  const displayHealth = portfolioHealthFromRisk(displayRisk);
+
+  const previewBullets = structured.bullets.slice(0, previewBulletMax);
+  const insightChips = hideInsightChips ? [] : structured.chips.slice(0, 4);
 
   return (
-    <FinancialCard
-      padding="md"
-      elevation="flat"
-      className={`border-[var(--border)] ${fillCell ? cellFill : ""}`.trim()}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary)]">
-            AI intelligence
-          </p>
-          <h3 className="mt-0.5 text-base font-semibold tracking-tight text-[var(--text-primary)]">
-            {structured.title}
-          </h3>
-        </div>
-        <div className="flex gap-2">
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-center">
-            <p className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
-              Risk
+    <>
+      <FinancialCard
+        padding="md"
+        elevation="flat"
+        className={`border-[var(--border)] ${fillCell ? cellFill : ""}`.trim()}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary)]">
+              AI intelligence
             </p>
-            <p className="mt-0.5 text-sm font-bold tabular-nums text-[var(--text-primary)]">
-              {structured.riskScore != null ? structured.riskScore : "n/d"}
-            </p>
-            <p className="text-[9px] text-[var(--text-secondary)]">/100</p>
+            <h3 className="ds-h3 mt-0.5 line-clamp-2">{structured.title}</h3>
           </div>
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-center">
-            <p className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
-              Health
-            </p>
-            {health.kind === "pending" ? (
-              <p className="mt-1 text-[10px] font-semibold uppercase text-[var(--text-secondary)]">Pending</p>
-            ) : (
-              <p className="mt-0.5 text-lg font-bold tabular-nums text-[var(--accent)]">{health.letter}</p>
-            )}
+          <div className="flex shrink-0 gap-2">
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-center">
+              <p className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+                Risk
+              </p>
+              <p className="mt-0.5 text-sm font-bold tabular-nums text-[var(--text-primary)]">{displayRisk}</p>
+              <p className="text-[9px] text-[var(--text-secondary)]">/100</p>
+              {!hasExtracted ? (
+                <p className="mt-0.5 text-[8px] font-medium uppercase tracking-wide text-[var(--text-secondary)]">
+                  Book
+                </p>
+              ) : null}
+            </div>
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-center">
+              <p className="text-[9px] font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+                Health
+              </p>
+              {displayHealth.kind === "pending" ? (
+                <p className="mt-1 text-[10px] font-semibold uppercase text-[var(--text-secondary)]">Pending</p>
+              ) : (
+                <p className="mt-0.5 text-lg font-bold tabular-nums text-[var(--accent)]">{displayHealth.letter}</p>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      {previewBullets.length > 0 ? (
-        <ul className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
-          {previewBullets.map((b, i) => (
-            <li key={i} className="flex gap-2 text-xs leading-snug text-[var(--text-secondary)]">
-              <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[var(--accent)]" />
-              <span className="line-clamp-3">{b}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-3 text-xs text-[var(--text-secondary)]">
-          Narrative stored; open full analysis for raw sections.
-        </p>
-      )}
+        {insightChips.length > 0 ? (
+          <div className="mt-3 flex min-h-[28px] flex-wrap gap-1.5 border-t border-[var(--border)] pt-3">
+            {insightChips.map((c, i) => (
+              <span
+                key={`${i}-${c.slice(0, 32)}`}
+                className="max-w-full truncate rounded-full border border-[var(--border)] bg-[var(--surface)] px-2 py-0.5 text-[10px] font-medium text-[var(--text-primary)]"
+                title={c}
+              >
+                {c}
+              </span>
+            ))}
+          </div>
+        ) : null}
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => setModalOpen(true)}
-          className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[11px] font-semibold text-white transition hover:opacity-95"
-        >
-          View full analysis
-        </button>
-        <Link
-          href={`/analysis?job_id=${job.id}`}
-          className="rounded-md border border-[var(--border)] px-3 py-1.5 text-[11px] font-semibold text-[var(--text-primary)] transition hover:border-[var(--accent)]"
-        >
-          Workspace
-        </Link>
-      </div>
+        {previewBullets.length > 0 ? (
+          <ul className="mt-3 space-y-2 border-t border-[var(--border)] pt-3">
+            {previewBullets.map((b, i) => (
+              <li key={i} className="flex gap-2 text-xs leading-snug text-[var(--text-secondary)]">
+                <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[var(--accent)]" />
+                <span className="line-clamp-2">{b}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-xs text-[var(--text-secondary)]">Open full analysis for narrative detail.</p>
+        )}
 
-      <InsightReportModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        title={structured.title}
-        markdown={structured.fullMarkdown}
-      />
-    </FinancialCard>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => openReport(structured.title, structured.fullMarkdown)}
+            className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[11px] font-semibold text-[var(--text-on-accent)] transition hover:opacity-95"
+          >
+            View full analysis
+          </button>
+          <Link
+            href={`/analysis?job_id=${job.id}`}
+            className="rounded-md border border-[var(--border)] px-3 py-1.5 text-[11px] font-semibold text-[var(--text-primary)] transition hover:border-[var(--accent)]"
+          >
+            Workspace
+          </Link>
+        </div>
+      </FinancialCard>
+      {reportModal}
+    </>
   );
 }

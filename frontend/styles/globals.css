@@ -20,24 +20,28 @@
   --header-height: 64px;
   --dash-row-height: 440px;
 
-  --radius-card: 12px;
+  --radius-card: 16px;
   --radius-control: 10px;
 
   --bg: #ffffff;
-  --surface: #f9fafb;
+  --surface: #f3f4f6;
   --surface-hover: color-mix(in srgb, var(--surface) 92%, var(--text-primary) 8%);
-  --card: #ffffff;
+  --card: #f9fafb;
   --border: #e5e7eb;
 
-  --text-primary: #111827;
-  --text-secondary: #6b7280;
+  /* Canonical text tokens (+ aliases for DS contracts) */
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text: var(--text-primary);
+  --muted: var(--text-secondary);
   --text-on-accent: #ffffff;
 
   --accent: #2563eb;
+  --primary: var(--accent);
   --accent-muted: color-mix(in srgb, var(--accent) 14%, var(--card));
-  --success: #3fb950;
-  --warning: #f2c94c;
-  --danger: #ef4444;
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
 
   --logo-badge-bg: #f3f4f6;
   --logo-badge-border: #e5e7eb;
@@ -46,16 +50,29 @@
   --shadow-card-hover: 0 4px 12px rgba(11, 15, 20, 0.08), 0 12px 28px rgba(11, 15, 20, 0.06);
 
   --chart-grid: #e5e7eb;
-  --chart-axis: #6b7280;
-  --chart-1: #4c82fb;
-  --chart-2: #2d62d8;
-  --chart-3: #7a8fa3;
-  --chart-4: #5b6573;
-  --chart-5: #94a3b8;
-  --chart-6: #c5ccd6;
-  --chart-highlight: #f2c94c;
+  --chart-axis: #64748b;
+  /* Semantic allocation (equity / fixed income / cash / alts) */
+  --chart-equity: #2563eb;
+  --chart-fixed-income: #16a34a;
+  --chart-cash: #64748b;
+  --chart-alt: #7c3aed;
+  --chart-1: var(--chart-equity);
+  --chart-2: var(--chart-fixed-income);
+  --chart-3: var(--chart-cash);
+  --chart-4: var(--chart-alt);
+  --chart-5: #0ea5e9;
+  --chart-6: #c026d3;
+  --chart-highlight: #d97706;
+
+  /* Recharts / overlays: high-contrast shell in both color schemes */
+  --tooltip-bg: #111827;
+  --tooltip-fg: #f9fafb;
+  --tooltip-border: rgba(255, 255, 255, 0.12);
+  --tooltip-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
 
   --overlay: rgba(17, 24, 39, 0.45);
+  /* Stacking: nav uses z-20; modals must render above app chrome */
+  --z-modal: 1000;
 
   /* Legacy aliases (components migrating) */
   --background: var(--bg);
@@ -80,21 +97,24 @@
 /* ─── Dark (toggle via <html class="dark">) ─── */
 html.dark {
   color-scheme: dark;
-  --bg: #0b0f17;
+  --bg: #0b0f14;
   --surface: #111827;
   --surface-hover: color-mix(in srgb, var(--surface) 88%, var(--text-primary) 12%);
   --card: #111827;
-  --border: rgba(255, 255, 255, 0.08);
+  --border: #1f2937;
 
-  --text-primary: #f9fafb;
-  --text-secondary: #9ca3af;
+  --text-primary: #e5e7eb;
+  --text-secondary: #94a3b8;
+  --text: var(--text-primary);
+  --muted: var(--text-secondary);
   --text-on-accent: #ffffff;
 
-  --accent: #60a5fa;
+  --accent: #3b82f6;
+  --primary: var(--accent);
   --accent-muted: color-mix(in srgb, var(--accent) 18%, var(--card));
-  --success: #3fb950;
-  --warning: #f2c94c;
-  --danger: #ef4444;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
 
   --logo-badge-bg: #1f2937;
   --logo-badge-border: rgba(255, 255, 255, 0.1);
@@ -103,14 +123,23 @@ html.dark {
   --shadow-card-hover: 0 12px 40px rgba(0, 0, 0, 0.55);
 
   --chart-grid: rgba(255, 255, 255, 0.08);
-  --chart-axis: #9ca3af;
-  --chart-1: #4c82fb;
-  --chart-2: #6b9cff;
-  --chart-3: #7a8fa3;
-  --chart-4: #9aa4b2;
-  --chart-5: #5c6570;
-  --chart-6: #3a4552;
-  --chart-highlight: #f2c94c;
+  --chart-axis: #94a3b8;
+  --chart-equity: #60a5fa;
+  --chart-fixed-income: #4ade80;
+  --chart-cash: #94a3b8;
+  --chart-alt: #a78bfa;
+  --chart-1: var(--chart-equity);
+  --chart-2: var(--chart-fixed-income);
+  --chart-3: var(--chart-cash);
+  --chart-4: var(--chart-alt);
+  --chart-5: #38bdf8;
+  --chart-6: #e879f9;
+  --chart-highlight: #fbbf24;
+
+  --tooltip-bg: #1f2937;
+  --tooltip-fg: #f9fafb;
+  --tooltip-border: rgba(255, 255, 255, 0.14);
+  --tooltip-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
 
   --overlay: rgba(0, 0, 0, 0.55);
 
